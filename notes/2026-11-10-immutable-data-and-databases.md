@@ -218,6 +218,95 @@ A class built at runtime with `make_dataclass` also works, but type checkers can
 Existing libraries: SQLAlchemy Core (best fit), PyPika, sqlglot, Ibis, Polars and DuckDB, `aiosql` and `pugsql`.
 Full ORMs have mutable, session-tied objects.
 
+## What this adds over a traditional ORM
+
+Gains:
+
+- No hidden state.
+  ORM objects are mutable and tracked by a session, which causes lazy loads from attribute access, stale identity maps and detached instance errors.
+- Database calls are visible.
+  Only `run`, `load` and `upsert` touch the database.
+- Business logic is pure functions, so tests need no database or mocks.
+- No accidental N+1 queries.
+- Each query returns its own typed result class.
+- No session, unit of work or change tracking.
+  Saving is an explicit upsert.
+
+Where an ORM is better:
+
+- Maturity, many dialects, and fixes for corner cases.
+- Migration tooling (Alembic, Django migrations).
+- Convenient navigation like `order.customer.name`.
+- Pooling, bulk operations, optimistic locking, inheritance mapping.
+- Team familiarity and community answers.
+
+The practical gap is smaller than the theory.
+SQLAlchemy Core is already the non-ORM half of SQLAlchemy.
+Core plus frozen classes and `select_into` gives most of the benefit and keeps the mature parts.
+The value is predictability and testability, not new capabilities.
+
+## Impact on application code of flat, immutable classes
+
+```python
+# mutable OO
+class Account:
+    def __init__(self, balance): self.balance = balance
+    def withdraw(self, amt):
+        if amt > self.balance: raise ValueError
+        self.balance -= amt
+
+acct.withdraw(50)
+
+# flat and immutable
+@dataclass(frozen=True, slots=True)
+class Account:
+    id: int
+    balance: int
+
+def withdraw(acct: Account, amt: int) -> Account:
+    if amt > acct.balance: raise ValueError
+    return replace(acct, balance=acct.balance - amt)
+
+acct = withdraw(acct, 50)
+```
+
+What changes:
+
+- Behavior moves out of classes into functions.
+  Polymorphism uses `match`, `functools.singledispatch`, `Protocol` or a dict of functions.
+- State is passed in and returned.
+- Things that are really stateful (connections, clocks, caches, random generators) stay as objects and are passed as parameters.
+- Updates use `replace(...)`, which is longer than `obj.x = y`.
+- Identity is an `id` field.
+  Equal fields means equal objects, and "same customer" means same id.
+- Relationships are lookups, such as `customers[order.customer_id]`.
+- Saving is an explicit call on the new value.
+
+Gains:
+
+- No aliasing bugs.
+- Easy testing.
+- Safe sharing across threads without locks.
+- Easy caching, memoization and undo.
+- Invariants checked at construction hold for the object's life.
+
+New bugs and costs:
+
+- Forgetting to rebind the result.
+  `withdraw(acct, 50)` without `acct = ...` silently does nothing.
+- Stale copies.
+  Anyone holding the old value keeps the old balance, so decide where the single current version lives (one state value or the database).
+- Copying cost for big collections, which is where persistent structures come in.
+- Lost encapsulation.
+  Rules across several objects cannot live in one class.
+- Derived data must be computed on demand or set at construction.
+  `cached_property` does not work with `slots=True`.
+- Many libraries (ORMs, GUI and form frameworks) expect mutable objects.
+
+It pays off most in code with a lot of shared state changed from many places, such as business rules and data pipelines.
+It pays off least in code that is mostly local mutation.
+A local mutable variable inside a function that returns an immutable result gives most of the benefit without the ceremony.
+
 ## Ideas to try next
 
 1. Generic `load` and `upsert` on SQLite with index DDL generation, a missing-index check, and tests.
