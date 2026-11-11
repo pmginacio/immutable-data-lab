@@ -1,4 +1,4 @@
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import Literal, cast
 
@@ -36,6 +36,11 @@ class Compare(Condition):
     left: "FieldRef"
     op: CompareOp
     right: object
+
+    def __post_init__(self) -> None:
+        right, left = self.right, self.left
+        if isinstance(right, FieldRef) and (right.owner, right.via) != (left.owner, left.via):
+            raise ValueError("only two fields of the same record can be compared")
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -125,22 +130,24 @@ class Path:
 
     # Comparing a path with a key is the same as comparing the `Ref` field that ends it.
     def __eq__(self, other: object) -> Compare:  # type: ignore[override]
-        return Compare(self.__ref_field(), "==", other)
+        return self.__inlay_field__() == other
 
     def __ne__(self, other: object) -> Compare:  # type: ignore[override]
-        return Compare(self.__ref_field(), "!=", other)
+        return self.__inlay_field__() != other
 
-    def __ref_field(self) -> FieldRef:
+    # A dunder name, so it never hides a field of the target class.
+    def __inlay_field__(self) -> FieldRef:
+        """The `Ref` field that ends this path."""
         *via, (owner, name) = self.__via
         return FieldRef(owner, name, tuple(via))
 
 
 def all_of(*conds: Condition | bool) -> And:
-    return And(_conditions(conds))
+    return And(cast(tuple[Condition, ...], conds))
 
 
 def any_of(*conds: Condition | bool) -> Or:
-    return Or(_conditions(conds))
+    return Or(cast(tuple[Condition, ...], conds))
 
 
 def none_of(*conds: Condition | bool) -> Not:
@@ -148,7 +155,7 @@ def none_of(*conds: Condition | bool) -> Not:
 
 
 def negate(cond: Condition | bool) -> Not:
-    return Not(*_conditions((cond,)))
+    return Not(cast(Condition, cond))
 
 
 def contains(field: str, text: str) -> Match:
@@ -161,29 +168,38 @@ def one_of[T](field: T, values: Iterable[T]) -> OneOf:
 
 # Type checkers see `Order.total` as an `int`, so the functions that take a field are typed with its value type.
 def as_field(value: object) -> FieldRef:
+    """The field `value` stands for; a relation such as `Order.customer` stands for its `Ref` field."""
+    if isinstance(value, Path):
+        return value.__inlay_field__()
     if not isinstance(value, FieldRef):
         raise TypeError(f"expected a field such as Order.total, got {value!r}")
     return value
 
 
-def classes_read(cond: Condition) -> set[type]:
-    """The classes whose tables are read to test `cond`: the one it applies to and those it reaches by relations."""
+def fields(cond: Condition) -> Iterator[FieldRef]:
+    """Every field that `cond` tests."""
     match cond:
         case Compare(left, _, FieldRef() as right):
-            return _classes(left) | _classes(right)
+            yield from (left, right)
         case Compare(field, _, _) | Match(field, _, _) | OneOf(field, _):
-            return _classes(field)
+            yield field
         case And(items) | Or(items):
-            return set().union(*map(classes_read, items))
+            for item in items:
+                yield from fields(item)
         case Not(item):
-            return classes_read(item)
+            yield from fields(item)
         case _:
             raise TypeError(f"expected a condition, got {cond!r}")
 
 
-def _classes(ref: FieldRef) -> set[type]:
-    return {owner for owner, _ in ref.via} | {ref.owner}
+def check_condition(cls: type, cond: Condition) -> None:
+    """Raise if `cond` tests a field that cannot be reached from `cls`."""
+    for ref in fields(cond):
+        start = ref.via[0][0] if ref.via else ref.owner
+        if start is not cls:
+            raise ValueError(f"{ref.owner.__name__}.{ref.name} cannot be used on {cls.__name__}")
 
 
-def _conditions(conds: Iterable[Condition | bool]) -> tuple[Condition, ...]:
-    return cast(tuple[Condition, ...], tuple(conds))
+def classes_read(cond: Condition) -> set[type]:
+    """The classes whose tables are read to test `cond`: the one it applies to and those it reaches by relations."""
+    return {cls for ref in fields(cond) for cls in (ref.owner, *(owner for owner, _ in ref.via))}

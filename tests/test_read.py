@@ -72,6 +72,13 @@ def test_filter_takes_conditions_and_relations(db):
     assert set(ids(big_in_lisbon)) == {"o1", "o4"}
 
 
+def test_filter_checks_its_conditions_right_away(db):
+    with pytest.raises(ValueError, match="Customer.name cannot be used on Order"):
+        db[Order].filter(Customer.name == "Ana")
+    with pytest.raises(TypeError, match="expected a condition"):
+        db[Order].filter(True)
+
+
 def test_filter_returns_a_new_view(db):
     orders = db[Order]
     big = orders.filter(Order.total > 100)
@@ -88,8 +95,10 @@ def test_sorted_by_several_fields(db):
 
 
 def test_sorted_needs_fields(db):
+    by_customer = sorted(db[Order], key=lambda o: (o.customer, o.id))
+    assert list(db[Order].sorted(key=Order.customer)) == by_customer
     with pytest.raises(TypeError, match="expected a field"):
-        db[Order].sorted(key=Order.customer)
+        db[Order].sorted(key="total")
     with pytest.raises(ValueError, match="Customer.city is not a field of Order"):
         list(db[Order].sorted(key=Order.customer.city))
 
@@ -165,8 +174,7 @@ def test_min_and_max_of_nothing_need_a_default(db):
 def test_aggregates_need_a_field_of_the_class_itself(db):
     with pytest.raises(ValueError, match="Customer.city is not a field of Order"):
         db[Order].min(Order.customer.city)
-    with pytest.raises(TypeError, match="expected a field"):
-        db[Order].sum(Order.customer)
+    assert db[Order].min(Order.customer) == min(o.customer for o in db[Order])
 
 
 def test_only_the_record_set_can_delete(db):

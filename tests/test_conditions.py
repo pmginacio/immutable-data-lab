@@ -3,7 +3,7 @@ import operator
 import pytest
 
 from inlay import Ref, all_of, any_of, contains, entity, key, negate, none_of, one_of
-from inlay.conditions import And, Compare, FieldRef, Match, Not, OneOf, Or
+from inlay.conditions import And, Compare, FieldRef, Match, Not, OneOf, Or, as_field, check_condition
 
 
 @entity(indexes=[("city",)])
@@ -91,11 +91,37 @@ def test_one_of_takes_any_iterable():
     [
         lambda: contains("name", "n"),
         lambda: one_of("city", ["Lisbon"]),
-        lambda: one_of(Order.customer, ["c1"]),
     ],
 )
 def test_functions_taking_a_field_reject_anything_else(mistake):
     with pytest.raises(TypeError, match="expected a field"):
+        mistake()
+
+
+def test_a_relation_stands_for_its_ref_field():
+    ref = as_field(OrderLine.order.customer)
+    assert (ref.owner, ref.name, ref.via) == (Order, "customer", ((OrderLine, "order"),))
+    cond = one_of(Order.customer, ["c1", "c2"])
+    assert (cond.field.owner, cond.field.name, cond.values) == (Order, "customer", ("c1", "c2"))
+
+
+def test_check_condition_rejects_fields_of_another_class():
+    check_condition(Order, (Order.total > 1) & (Order.customer.city == "Lisbon"))
+    with pytest.raises(ValueError, match="Order.total cannot be used on Customer"):
+        check_condition(Customer, Order.total > 1)
+
+
+def test_check_condition_rejects_a_plain_bool():
+    with pytest.raises(TypeError, match="expected a condition"):
+        check_condition(Order, all_of(True))
+
+
+@pytest.mark.parametrize(
+    "mistake",
+    [lambda: Order.total > Customer.name, lambda: Order.customer.city == Customer.city],
+)
+def test_only_fields_of_the_same_record_compare(mistake):
+    with pytest.raises(ValueError, match="same record"):
         mistake()
 
 

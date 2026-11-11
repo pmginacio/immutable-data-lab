@@ -120,19 +120,3 @@ def test_relations_become_nested_subqueries():
         '"order_id" IN (SELECT "id" FROM "order" WHERE "customer_id" IN (SELECT "id" FROM "customer" WHERE "city" = ?))',
         ["Lisbon"],
     )
-
-
-def test_field_of_another_class_is_rejected():
-    with pytest.raises(ValueError, match="Order.total cannot be used on Customer"):
-        condition_sql(meta(Customer), Order.total > 1)
-
-
-@pytest.mark.parametrize("cond", [Order.total > Customer.name, Order.customer.city == Customer.city])
-def test_only_fields_of_the_same_record_compare(cond):
-    with pytest.raises(ValueError, match="same record"):
-        condition_sql(meta(Order), cond)
-
-
-def test_a_plain_bool_is_not_a_condition():
-    with pytest.raises(TypeError, match="expected a condition"):
-        condition_sql(meta(Order), True)

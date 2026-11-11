@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from inlay.conditions import And, Compare, Condition, FieldRef, Match, Not, OneOf, Or, all_of, classes_read
+from inlay.conditions import And, Compare, Condition, FieldRef, Match, Not, OneOf, Or, classes_read
 from inlay.entity import EntityMeta, FieldMeta, meta
 from inlay.types import SQL_TYPES, to_sql
 
@@ -60,24 +60,19 @@ def delete_equal_sql(m: EntityMeta) -> str:
     return f"DELETE FROM {quote(m.table)} WHERE {' AND '.join(f'{quote(f.column)} = ?' for f in m.fields)}"
 
 
-def clear_sql(m: EntityMeta, conds: Sequence[Condition]) -> tuple[str, list[object]]:
-    """Deletes every record that matches all of `conds`, or the whole table without any."""
-    sql = f"DELETE FROM {quote(m.table)}"
-    if not conds:
-        return sql, []
-    where, params = condition_sql(m, all_of(*conds))
-    return f"{sql} WHERE {where}", params
+def clear_sql(m: EntityMeta, cond: Condition) -> tuple[str, list[object]]:
+    """Deletes every record that matches `cond`."""
+    where, params = condition_sql(m, cond)
+    return f"DELETE FROM {quote(m.table)} WHERE {where}", params
 
 
 _COMPARE_OPS = {"==": "=", "!=": "!=", "<": "<", "<=": "<=", ">": ">", ">=": ">="}
 
 
 def condition_sql(m: EntityMeta, cond: Condition) -> tuple[str, list[object]]:
-    """The SQL for `cond` on the table of `m`, and its parameters in order."""
+    """The SQL for `cond` on the table of `m`, and its parameters in order. `cond` was checked by `check_condition`."""
     match cond:
         case Compare(left, op, FieldRef() as right):
-            if (right.owner, right.via) != (left.owner, left.via):
-                raise ValueError("only two fields of the same record can be compared")
             return _on_path(m, left, f"{_column(left)} {_COMPARE_OPS[op]} {_column(right)}", [])
         case Compare(left, op, value):
             return _on_path(m, left, f"{_column(left)} {_COMPARE_OPS[op]} ?", [to_sql(value)])
@@ -115,9 +110,6 @@ def _column(ref: FieldRef) -> str:
 
 def _on_path(m: EntityMeta, ref: FieldRef, sql: str, params: list[object]) -> tuple[str, list[object]]:
     """Wraps `sql`, a test on `ref`'s own table, in one subquery for each relation between `m` and that table."""
-    start = ref.via[0][0] if ref.via else ref.owner
-    if start is not m.cls:
-        raise ValueError(f"{ref.owner.__name__}.{ref.name} cannot be used on {m.cls.__name__}")
     for owner, name in reversed(ref.via):
         f = meta(owner).field(name)
         assert f.target is not None
@@ -135,15 +127,15 @@ class Query:
     it becomes the `source` of a new query.
     """
 
-    where: tuple[Condition, ...] = ()
+    where: And = And(())
     order: tuple[tuple[FieldRef, bool], ...] = ()  # each field with whether it sorts descending
     limit: int | None = None
     offset: int = 0
     source: "Query | None" = None
 
-    def filter(self, conds: tuple[Condition, ...]) -> "Query":
+    def filter(self, cond: And) -> "Query":
         q = self._open()
-        return replace(q, where=q.where + conds)
+        return replace(q, where=And(q.where.items + cond.items))
 
     def sorted(self, fields: tuple[FieldRef, ...], reverse: bool) -> "Query":
         # Like sorting twice with the built-in `sorted`: the last sort is the main one, the earlier ones break ties.
@@ -156,7 +148,7 @@ class Query:
 
     def reads(self) -> set[type]:
         """The classes that the conditions of this query and of its sources apply to or reach by relations."""
-        found: set[type] = set().union(*map(classes_read, self.where))
+        found = classes_read(self.where)
         if self.source is not None:
             found |= self.source.reads()
         return found
@@ -177,8 +169,8 @@ def select_sql(m: EntityMeta, query: Query) -> tuple[str, list[object]]:
         inner, params = select_sql(m, query.source)
         source = f"({inner})"
     sql = f"SELECT {_columns(m)} FROM {source}"
-    if query.where:
-        where, where_params = condition_sql(m, all_of(*query.where))
+    if query.where.items:
+        where, where_params = condition_sql(m, query.where)
         sql += f" WHERE {where}"
         params += where_params
     if query.order:

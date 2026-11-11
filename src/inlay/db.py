@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Final, Literal, Self, overload
 
-from inlay.conditions import Condition, FieldRef, all_of, as_field
+from inlay.conditions import Condition, FieldRef, all_of, as_field, check_condition
 from inlay.entity import EntityMeta, meta
 from inlay.sql import (
     BEGIN,
@@ -93,7 +93,9 @@ class RecordView[T]:
         return self._view(self._query.sliced(start, stop))
 
     def filter(self, *conds: Condition | bool) -> "RecordView[T]":
-        return self._view(self._query.filter(all_of(*conds).items))
+        cond = all_of(*conds)
+        check_condition(self._meta.cls, cond)
+        return self._view(self._query.filter(cond))
 
     def sorted(self, *, key: Any, reverse: bool = False) -> "RecordView[T]":
         """`key` is a field, or a tuple of fields."""
@@ -154,7 +156,9 @@ class RecordSet[T](RecordView[T]):
                 raise Missing(f"{len(keys) - deleted} of the {self._meta.cls.__name__} keys are not stored")
 
     def clear(self, *conds: Condition | bool) -> None:
-        sql, params = clear_sql(self._meta, all_of(*conds).items)
+        cond = all_of(*conds)
+        check_condition(self._meta.cls, cond)
+        sql, params = clear_sql(self._meta, cond)
         _check_idle(self._reading, [self._meta.cls])
         with _transaction(self._conn):
             self._conn.execute(sql, params)

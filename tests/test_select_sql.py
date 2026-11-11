@@ -2,7 +2,7 @@ import sqlite3
 
 import pytest
 
-from inlay import Ref, entity, key
+from inlay import Ref, all_of, entity, key
 from inlay.entity import meta
 from inlay.sql import Query, aggregate_sql, create_table_sql, insert_sql, select_sql
 
@@ -62,7 +62,7 @@ def test_empty_query_selects_everything(conn):
 
 
 def test_filters_add_up(conn):
-    query = Query().filter((Customer.city == "Lisbon",)).filter((Customer.name > "Ana",))
+    query = Query().filter(all_of(Customer.city == "Lisbon")).filter(all_of(Customer.name > "Ana"))
     assert set(ids(conn, query)) == {"c3", "c5"}
 
 
@@ -103,7 +103,7 @@ def test_slice_of_a_slice(conn):
 
 
 def test_conditions_after_a_slice_apply_to_the_slice(conn):
-    query = by_name().sliced(0, 3).filter((Customer.city == "Lisbon",))
+    query = by_name().sliced(0, 3).filter(all_of(Customer.city == "Lisbon"))
     assert ids(conn, query) == ["c2", "c3"]
 
 
@@ -127,7 +127,7 @@ def test_aggregates_cover_only_the_slice(conn):
 
 
 def test_aggregates_of_nothing(conn):
-    nothing = Query().filter((Customer.city == "Nowhere",))
+    nothing = Query().filter(all_of(Customer.city == "Nowhere"))
     assert aggregate(conn, nothing, "COUNT") == 0
     assert aggregate(conn, nothing, "SUM", Customer.age) is None
     assert aggregate(conn, nothing, "MIN", Customer.age) is None
