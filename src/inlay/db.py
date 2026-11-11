@@ -12,7 +12,10 @@ from inlay.sql import (
     COMMIT,
     CONNECTION_SETUP,
     LIST_TABLES,
+    RELEASE,
     ROLLBACK,
+    ROLLBACK_TO,
+    SAVEPOINT,
     clear_sql,
     create_index_sql,
     create_table_sql,
@@ -119,19 +122,22 @@ class Db:
                 self._conn.executemany(sql_for(m), [_row(m, o) for o in group])
 
 
+# ROLLBACK TO leaves the savepoint open, so it is released as well.
+_TOP_LEVEL = (BEGIN, COMMIT, (ROLLBACK,))
+_NESTED = (SAVEPOINT, RELEASE, (ROLLBACK_TO, RELEASE))
+
+
 @contextmanager
 def _transaction(conn: sqlite3.Connection) -> Iterator[None]:
-    """Joins an open transaction, or runs a new one that commits at the end."""
+    """Runs a new transaction, or a savepoint inside an open one, so a failed call leaves nothing behind."""
+    begin, end, undo = _NESTED if conn.in_transaction else _TOP_LEVEL
     with _store_errors():
-        if conn.in_transaction:
-            yield
-            return
-        conn.execute(BEGIN)
+        conn.execute(begin)
         try:
             yield
-            conn.execute(COMMIT)
+            conn.execute(end)
         except BaseException:
-            conn.execute(ROLLBACK)
+            _execute_all(conn, undo)
             raise
 
 

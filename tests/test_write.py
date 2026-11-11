@@ -169,6 +169,16 @@ def test_store_errors_inside_a_transaction_can_be_caught(db):
     assert db[Customer].get(bob.id) == bob
 
 
+def test_failed_call_inside_a_transaction_writes_nothing(db):
+    ana, bob = Customer(name="Ana"), Customer(name="Bob")
+    db.add(ana)
+    with db.transaction():
+        with pytest.raises(AlreadyExists):
+            db.add(bob, ana)
+        assert db[Customer].get(bob.id) is None
+    assert db[Customer].get(bob.id) is None
+
+
 def test_unknown_class(db):
     @entity
     class Other:

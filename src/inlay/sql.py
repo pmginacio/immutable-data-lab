@@ -5,6 +5,9 @@ CONNECTION_SETUP = ("PRAGMA foreign_keys = ON", "PRAGMA journal_mode = WAL")
 BEGIN = "BEGIN IMMEDIATE"
 COMMIT = "COMMIT"
 ROLLBACK = "ROLLBACK"
+SAVEPOINT = "SAVEPOINT inlay"
+RELEASE = "RELEASE inlay"
+ROLLBACK_TO = "ROLLBACK TO inlay"
 LIST_TABLES = "SELECT name, sql FROM sqlite_master WHERE type = 'table'"
 
 
