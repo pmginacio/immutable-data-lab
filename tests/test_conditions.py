@@ -86,6 +86,19 @@ def test_one_of_takes_any_iterable():
     assert (cond.field.name, cond.values) == ("city", ("Lisbon",))
 
 
+@pytest.mark.parametrize(
+    "mistake",
+    [
+        lambda: contains("name", "n"),
+        lambda: one_of("city", ["Lisbon"]),
+        lambda: one_of(Order.customer, ["c1"]),
+    ],
+)
+def test_functions_taking_a_field_reject_anything_else(mistake):
+    with pytest.raises(TypeError, match="expected a field"):
+        mistake()
+
+
 def test_combining_conditions():
     a, b = Order.total > 1, Order.total < 9
     both, either = a & b, a | b

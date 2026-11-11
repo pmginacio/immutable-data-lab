@@ -152,11 +152,18 @@ def negate(cond: Condition | bool) -> Not:
 
 
 def contains(field: str, text: str) -> Match:
-    return Match(cast(FieldRef, field), "contains", text)
+    return Match(_field(field), "contains", text)
 
 
 def one_of[T](field: T, values: Iterable[T]) -> OneOf:
-    return OneOf(cast(FieldRef, field), tuple(values))
+    return OneOf(_field(field), tuple(values))
+
+
+# Type checkers see `Order.total` as an `int`, so the functions that take a field are typed with its value type.
+def _field(value: object) -> FieldRef:
+    if not isinstance(value, FieldRef):
+        raise TypeError(f"expected a field such as Order.total, got {value!r}")
+    return value
 
 
 def _conditions(conds: Iterable[Condition | bool]) -> tuple[Condition, ...]:
