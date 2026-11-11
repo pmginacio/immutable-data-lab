@@ -90,7 +90,7 @@ class Db:
             for m, group in self._grouped(objs):
                 deleted = self._conn.executemany(delete_equal_sql(m), [_row(m, o) for o in group]).rowcount
                 if deleted != len(group):
-                    raise Missing(f"{len(group) - deleted} of the {m.cls.__name__} objects are not stored")
+                    raise Missing(f"{len(group) - deleted} of the {m.cls.__name__} records are not stored")
 
     def discard(self, *objs: object) -> None:
         self._write(delete_equal_sql, objs)
