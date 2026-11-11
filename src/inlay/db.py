@@ -144,9 +144,10 @@ class RecordSet[T](RecordView[T]):
             if deleted != len(keys):
                 raise Missing(f"{len(keys) - deleted} of the {self._meta.cls.__name__} keys are not stored")
 
-    def clear(self) -> None:
+    def clear(self, *conds: Condition | bool) -> None:
+        sql, params = clear_sql(self._meta, all_of(*conds).items)
         with _transaction(self._conn):
-            self._conn.execute(clear_sql(self._meta))
+            self._conn.execute(sql, params)
 
 
 class Db:

@@ -60,8 +60,13 @@ def delete_equal_sql(m: EntityMeta) -> str:
     return f"DELETE FROM {quote(m.table)} WHERE {' AND '.join(f'{quote(f.column)} = ?' for f in m.fields)}"
 
 
-def clear_sql(m: EntityMeta) -> str:
-    return f"DELETE FROM {quote(m.table)}"
+def clear_sql(m: EntityMeta, conds: Sequence[Condition]) -> tuple[str, list[object]]:
+    """Deletes every record that matches all of `conds`, or the whole table without any."""
+    sql = f"DELETE FROM {quote(m.table)}"
+    if not conds:
+        return sql, []
+    where, params = condition_sql(m, all_of(*conds))
+    return f"{sql} WHERE {where}", params
 
 
 _COMPARE_OPS = {"==": "=", "!=": "!=", "<": "<", "<=": "<=", ">": ">", ">=": ">="}

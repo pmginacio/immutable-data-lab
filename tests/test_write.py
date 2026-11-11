@@ -137,6 +137,24 @@ def test_clear(db):
     assert db[Customer].get(ana.id) is None
 
 
+def test_clear_with_conditions_deletes_only_matching_records(db):
+    ana, bob = Customer(name="Ana"), Customer(name="Bob")
+    small, big = Order(customer=ana.id, total=5), Order(customer=bob.id, total=500)
+    db.add(ana, bob, small, big)
+    db[Order].clear(Order.total > 100, Order.customer.name == "Bob")
+    assert set(db[Order]) == {small}
+    db[Order].clear(Order.total > 100)
+    assert set(db[Order]) == {small}
+
+
+def test_clear_with_a_broken_condition_changes_nothing(db):
+    ana = Customer(name="Ana")
+    db.add(ana)
+    with pytest.raises(ValueError, match="cannot be used on Customer"):
+        db[Customer].clear(Order.total > 1)
+    assert db[Customer].get(ana.id) == ana
+
+
 def test_transaction_rolls_back_on_error(db):
     ana, bob = Customer(name="Ana"), Customer(name="Bob")
     with pytest.raises(RuntimeError):
