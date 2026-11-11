@@ -42,7 +42,7 @@ def report(conn: sqlite3.Connection) -> None:
 
 The middle of `load_orders` is SQL metaprogramming: a Python program that writes a program in another language, as a string.
 As soon as a filter is optional, the text has to be built piece by piece, and the placeholders and the parameters have to be kept in step by hand.
-Type checkers, refactoring tools and tests cannot see inside it.
+Type checkers and refactoring tools cannot see inside it, and nothing checks the string before it runs.
 The rows come back as tuples, so the columns in the string and the fields of the class are matched by position.
 
 ORMs hide the string, but the replacement is often just as much a language of its own, written with Python syntax:
@@ -58,7 +58,7 @@ select(Order).join(Order.customer).where(Customer.city == "Lisbon", Order.total 
 `customer__city` and `total__gt` are conditions packed into names.
 The SQLAlchemy line is SQL, one clause per method call.
 Each is a mini-language that has to be learned next to Python.
-The objects they return carry hidden machinery too: sessions, identity maps, change tracking and lazy loading.
+The objects they return carry hidden machinery too: SQLAlchemy's carry sessions, identity maps and change tracking, and Django's load related rows lazily.
 
 ### Where ORMs fall short
 
@@ -74,7 +74,13 @@ session.commit()
 
 In SQLAlchemy, assigning to an attribute is a database write, done at the next flush.
 No line says "write", so a stray assignment in a helper function changes the database.
-After the session is closed, reading an attribute that was not loaded yet raises `DetachedInstanceError`, because the object was never a plain value.
+After a commit or after the session is closed, reading an attribute that has expired or was never loaded raises `DetachedInstanceError`, because the object was never a plain value.
+
+Both problems have the same root: the ORM tries to keep a mutable object in sync with a row automatically.
+That takes machinery, and the machinery is where it fails:
+
+- Change tracking. The session has to notice every assignment and decide when to write it. With autoflush, an ordinary query in the middle of a function first writes the pending changes. An error from an earlier assignment then shows up on an unrelated line.
+- Sessions. An object belongs to one session. Attaching it to another one raises an error, so objects cannot just be passed around.
 
 The object is secretly a window onto a row.
 In inlay a record is a frozen value: assigning to a field raises an error, a write is always a call such as `db.update(...)`, and a record keeps working after the db is closed.
@@ -87,7 +93,11 @@ The two do not fit, so something has to translate between them.
 
 In plain code the translation is SQL metaprogramming: strings of SQL, written and put together by hand.
 In an ORM it is the mapping layer: sessions that track which objects changed, identity maps, lazy loading, and rules for storing a class hierarchy in tables.
-The mini-languages and the machinery are consequences of this mismatch.
+These come from mutable objects.
+
+The query mini-languages have a second cause.
+An ORM has to run any query the database can: joins, grouping, aggregates, subqueries.
+Python has no syntax for those, so each ORM invents one.
 
 ### Changing the classes, not the translator
 
@@ -101,7 +111,8 @@ Two choices remove most of the mismatch.
 
 With these, a class already has the shape of a table.
 Fields are columns, the key field is the primary key, and a reference field is a foreign key.
-There is nothing left to map, so no mapping layer is needed.
+The little that is left to map, such as column names and date types, is read from the class and keeps no state.
+There are no sessions or identity maps, and nothing to configure beyond the class itself and its indexes.
 
 The database is then a set of values for each class, and its API can use words that Python already has: `add`, `in`, `len`, `sorted`, slicing and `replace`.
 The same function becomes:
@@ -116,15 +127,18 @@ def load_orders(db: Db, city: str | None = None, minimum: int | None = None) -> 
     return list(orders.sorted(key=Order.total, reverse=True)[:10])
 ```
 
-A view is a value, so adding a filter is just assigning a new view.
+A view is an immutable description of a query, so adding a filter returns a new view.
 Nothing is put together as text, and nothing runs until the last line.
 The function returns `Order` records, not tuples, and type checkers flag a misspelled field.
 
-The price is real but small for ordinary application data.
-Information hiding, inheritance, nested objects, in-place mutation and arbitrary queries are given up.
+The price is real.
+Information hiding, inheritance, nested objects and in-place mutation are given up, and so are arbitrary queries.
 A record is plain, visible data, and the rules that were methods become functions.
-A set of records is filtered, sorted and sliced like a collection held in memory, and nobody writes a query language against a list.
-Joins and grouping are plain Python over whole records.
+Code that holds records in memory does not query them.
+It filters, sorts, slices and loops.
+inlay offers those operations on a set of records, so its API can stay close to Python.
+Joins and grouping are done in Python over the records you load, as they would be for a list.
+That keeps the API small, and it means large reports are loaded into memory instead of computed by the database.
 
 ## inlay
 
@@ -152,12 +166,13 @@ class Order:
     total: int
 
 
-# Opens the file and creates the tables and indexes for these two classes
+# Opens the file and creates the tables and indexes for these two classes if needed
 # The db is closed at the end of the block, like a file.
 with inlay.open("shop.db", [Customer, Order]) as db:
     ana = Customer(name="Ana", city="Lisbon")
     bob = Customer(name="Bob", city="Porto")
-    # One call can mix classes, and it is all or nothing: a record may refer to another one in the same call.
+    # One call can mix classes in the same transaction, and it is all or nothing.
+    # A record may refer to another one in the same call.
     db.add(ana, bob, Order(customer=ana.id, total=120), Order(customer=ana.id, total=40))
 
     # db is a dict[type, Set] so that you can access the db by class type.
@@ -255,8 +270,6 @@ This is version one, and the limits are on purpose.
 - No cascading deletes, reverse relations, grouping, or migrations.
 - Slices that skip many records are slow, because SQLite reads and discards the skipped rows.
   Filtering from the last seen value avoids that.
-- Typing class-level fields as their value type costs a lot of code, and the design notes list it as something to re-evaluate.
-
 ## Running it
 
 inlay needs Python 3.15 or later.
