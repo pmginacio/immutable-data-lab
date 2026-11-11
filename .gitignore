@@ -11,3 +11,8 @@ wheels/
 
 # IDE
 .idea/
+
+# Databases made by running the examples
+*.db
+*.db-wal
+*.db-shm

@@ -199,6 +199,7 @@ with inlay.open("shop.db", [Customer, Order]) as db:
 ```
 
 A small shop app that uses all of this, with comments that point at each feature, is in [`examples/shop.py`](examples/shop.py).
+[`examples/sales.py`](examples/sales.py) is a command-line tool that imports a bar's SAF-T (PT) sales files and prints monthly, daily and hourly sales reports.
 
 ## Design
 
@@ -278,9 +279,11 @@ inlay needs Python 3.15 or later.
 uv run pytest                      # tests
 uv run pyright                     # type checks, including the example
 uv run python examples/shop.py     # the example app
+uv run python examples/sales.py -h # the sales reports
 ```
 
 ## Notes
 
 - [`notes/2026-11-10-design-v1.md`](notes/2026-11-10-design-v1.md) is the full design of inlay, with the reasons for each choice, and its follow-ups.
+- [`notes/2026-11-11-sales-example-learnings.md`](notes/2026-11-11-sales-example-learnings.md) is what writing the sales example taught us about inlay, and the ideas it suggests.
 - [`notes/2026-11-10-immutable-data-and-databases.md`](notes/2026-11-10-immutable-data-and-databases.md) is the background: immutable data, FP style, and database design in Python.
