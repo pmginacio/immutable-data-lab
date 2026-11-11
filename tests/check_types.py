@@ -43,6 +43,10 @@ def _tables(db: Db) -> None:
     assert_type(view, RecordView[Order])
     assert_type(view.get("o1"), Order | None)
     assert_type(len(view), int)
+    assert_type(view.sum(Order.total), int)
+    assert_type(view.min(Order.total), int)
+    assert_type(view.max(Order.total, default=None), int | None)
+    assert_type(o in view, bool)
     for order in view:
         assert_type(order, Order)
 

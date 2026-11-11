@@ -1,3 +1,6 @@
+from dataclasses import replace
+from datetime import UTC, datetime
+
 import pytest
 
 import inlay
@@ -18,6 +21,12 @@ class Order:
     total: int
 
 
+@entity
+class Event:
+    id: str = key()
+    at: datetime
+
+
 ANA = Customer(id="ana", name="Ana", city="Lisbon")
 BOB = Customer(id="bob", name="Bob", city="Porto")
 CID = Customer(id="cid", name="Cid", city="Lisbon")
@@ -29,10 +38,16 @@ ORDERS = [
 ]
 
 
+EVENTS = [
+    Event(id="e1", at=datetime(2026, 3, 1, tzinfo=UTC)),
+    Event(id="e2", at=datetime(2026, 1, 1, tzinfo=UTC)),
+]
+
+
 @pytest.fixture
 def db(tmp_path):
-    with inlay.open(tmp_path / "shop.db", [Customer, Order]) as db:
-        db.add(ANA, BOB, CID, *ORDERS)
+    with inlay.open(tmp_path / "shop.db", [Customer, Order, Event]) as db:
+        db.add(ANA, BOB, CID, *ORDERS, *EVENTS)
         yield db
 
 
@@ -108,6 +123,50 @@ def test_get_looks_only_inside_the_view(db):
     assert big.get("o1") == ORDERS[0]
     assert big.get("o2") is None
     assert big.get("nope") is None
+
+
+def test_in_needs_an_equal_record(db):
+    assert ANA in db[Customer]
+    assert replace(ANA, city="Faro") not in db[Customer]
+    assert ORDERS[0] not in db[Customer]
+    assert ANA not in db[Customer].filter(Customer.city == "Porto")
+
+
+def test_in_looks_inside_a_slice(db):
+    from_bob_on = db[Customer].sorted(key=Customer.name)[1:]
+    assert BOB in from_bob_on
+    assert ANA not in from_bob_on
+
+
+def test_sum(db):
+    assert db[Order].sum(Order.total) == 520
+    assert db[Order].filter(Order.customer == "ana").sum(Order.total) == 200
+    assert db[Order].sorted(key=Order.total)[:2].sum(Order.total) == 170
+    assert db[Order].filter(Order.total > 999).sum(Order.total) == 0
+
+
+def test_min_and_max(db):
+    assert db[Order].min(Order.total) == 50
+    assert db[Order].max(Order.total) == 200
+    assert db[Customer].filter(Customer.city == "Lisbon").max(Customer.name) == "Cid"
+    assert db[Event].min(Event.at) == datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def test_min_and_max_of_nothing_need_a_default(db):
+    nothing = db[Order].filter(Order.total > 999)
+    with pytest.raises(ValueError, match="min.. of an empty view"):
+        nothing.min(Order.total)
+    with pytest.raises(ValueError, match="max.. of an empty view"):
+        nothing.max(Order.total)
+    assert nothing.min(Order.total, default=0) == 0
+    assert nothing.max(Order.total, None) is None
+
+
+def test_aggregates_need_a_field_of_the_class_itself(db):
+    with pytest.raises(ValueError, match="Customer.city is not a field of Order"):
+        db[Order].min(Order.customer.city)
+    with pytest.raises(TypeError, match="expected a field"):
+        db[Order].sum(Order.customer)
 
 
 def test_only_the_record_set_can_delete(db):

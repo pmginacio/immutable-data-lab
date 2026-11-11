@@ -4,7 +4,7 @@ from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, S
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Any, Literal, Self
+from typing import Any, Final, Literal, Self, overload
 
 from inlay.conditions import Condition, FieldRef, all_of, as_field
 from inlay.entity import EntityMeta, meta
@@ -51,6 +51,9 @@ class BrokenRef(StoreError):
     pass
 
 
+_MISSING: Final = object()
+
+
 @dataclass(frozen=True, slots=True, eq=False)
 class RecordView[T]:
     """A lazy, read-only collection of records. Every read runs its query again."""
@@ -66,6 +69,12 @@ class RecordView[T]:
 
     def __len__(self) -> int:
         return self._aggregate("COUNT")
+
+    def __contains__(self, record: object) -> bool:
+        if type(record) is not self._meta.cls:
+            return False
+        equal = (getattr(self._meta.cls, f.name) == getattr(record, f.name) for f in self._meta.fields)
+        return len(self.filter(*equal)) > 0
 
     def __getitem__(self, s: slice) -> "RecordView[T]":
         if not isinstance(s, slice):
@@ -86,6 +95,36 @@ class RecordView[T]:
     def get(self, key: str) -> T | None:
         key_field = FieldRef(self._meta.cls, self._meta.key.name, ())
         return next(iter(self.filter(key_field == key)), None)
+
+    @overload
+    def sum(self, field: int) -> int: ...
+    @overload
+    def sum(self, field: float) -> float: ...
+    def sum(self, field: Any) -> Any:
+        return self._aggregate("SUM", as_field(field)) or 0
+
+    @overload
+    def min[V](self, field: V) -> V: ...
+    @overload
+    def min[V, D](self, field: V, default: D) -> V | D: ...
+    def min(self, field: Any, default: Any = _MISSING) -> Any:
+        return self._extreme("MIN", field, default)
+
+    @overload
+    def max[V](self, field: V) -> V: ...
+    @overload
+    def max[V, D](self, field: V, default: D) -> V | D: ...
+    def max(self, field: Any, default: Any = _MISSING) -> Any:
+        return self._extreme("MAX", field, default)
+
+    def _extreme(self, function: Literal["MIN", "MAX"], field: Any, default: object) -> Any:
+        ref = as_field(field)
+        value = self._aggregate(function, ref)
+        if value is not None:
+            return from_sql(value, self._meta.field(ref.name).py_type)
+        if default is _MISSING:
+            raise ValueError(f"{function.lower()}() of an empty view")
+        return default
 
     def _view(self, query: Query) -> "RecordView[T]":
         return RecordView(self._conn, self._meta, query)
