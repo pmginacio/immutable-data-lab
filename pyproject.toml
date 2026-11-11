@@ -23,5 +23,5 @@ dev = [
 module-name = "inlay"
 
 [tool.pyright]
-include = ["src", "tests/check_types.py"]
+include = ["src", "tests/check_types.py", "examples"]
 reportUnnecessaryTypeIgnoreComment = true
