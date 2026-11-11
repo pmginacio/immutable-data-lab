@@ -1,6 +1,6 @@
 import os
 import sqlite3
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from types import TracebackType
@@ -69,9 +69,9 @@ class Table[T]:
 
 
 class Db:
-    def __init__(self, conn: sqlite3.Connection, metas: Sequence[EntityMeta]) -> None:
+    def __init__(self, conn: sqlite3.Connection, metas: Mapping[type, EntityMeta]) -> None:
         self._conn = conn
-        self._metas = {m.cls: m for m in metas}
+        self._metas = metas
 
     def __getitem__[T](self, cls: type[T]) -> Table[T]:
         return Table(self._conn, self._meta(cls))
@@ -163,14 +163,16 @@ def _from_row(m: EntityMeta, row: Sequence[object]) -> Any:
 
 
 def open(path: str | os.PathLike[str], entities: Iterable[type]) -> Db:
-    metas = tuple(map(meta, entities))
+    metas = {m.cls: m for m in map(meta, entities)}
     _check_refs(metas)
     conn = sqlite3.connect(path, autocommit=True)
     try:
         _execute_all(conn, (*CONNECTION_SETUP, BEGIN))
         tables = dict(conn.execute(LIST_TABLES))
-        _check_tables(metas, tables)
-        _execute_all(conn, (*_create_statements(metas, tables), COMMIT))
+        _check_tables(metas.values(), tables)
+        create_tables = [create_table_sql(m) for m in metas.values() if m.table not in tables]
+        create_indexes = [create_index_sql(m, i) for m in metas.values() for i in m.indexes]
+        _execute_all(conn, (*create_tables, *create_indexes, COMMIT))
     except BaseException:
         conn.close()  # also rolls back the schema changes
         raise
@@ -182,19 +184,18 @@ def _execute_all(conn: sqlite3.Connection, statements: Iterable[str]) -> None:
         conn.execute(statement)
 
 
-def _check_refs(metas: Sequence[EntityMeta]) -> None:
-    classes = {m.cls for m in metas}
+def _check_refs(metas: Mapping[type, EntityMeta]) -> None:
     dangling = [
         f"{m.cls.__name__}.{f.name} -> {f.target.__name__}"
-        for m in metas
+        for m in metas.values()
         for f in m.fields
-        if f.target is not None and f.target not in classes
+        if f.target is not None and f.target not in metas
     ]
     if dangling:
         raise TypeError(f"Ref fields point to entities not passed to inlay.open: {', '.join(dangling)}")
 
 
-def _check_tables(metas: Sequence[EntityMeta], tables: Mapping[str, str]) -> None:
+def _check_tables(metas: Collection[EntityMeta], tables: Mapping[str, str]) -> None:
     """Raise if a table already in the db was created differently from what its entity needs now."""
     changed = [m for m in metas if m.table in tables and tables[m.table] != create_table_sql(m)]
     if changed:
@@ -204,8 +205,3 @@ def _check_tables(metas: Sequence[EntityMeta], tables: Mapping[str, str]) -> Non
 def _mismatch(m: EntityMeta, stored_sql: str) -> str:
     return f"table {m.table!r} does not match its entity:\n  in db:  {stored_sql}\n  entity: {create_table_sql(m)}"
 
-
-def _create_statements(metas: Sequence[EntityMeta], tables: Mapping[str, str]) -> list[str]:
-    """`CREATE TABLE` for each missing table, then `CREATE INDEX IF NOT EXISTS` for every index."""
-    missing_tables = [create_table_sql(m) for m in metas if m.table not in tables]
-    return missing_tables + [create_index_sql(m, index) for m in metas for index in m.indexes]
