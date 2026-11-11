@@ -100,7 +100,9 @@ def test_sorted_needs_fields(db):
     with pytest.raises(TypeError, match="expected a field"):
         db[Order].sorted(key="total")
     with pytest.raises(ValueError, match="Customer.city is not a field of Order"):
-        list(db[Order].sorted(key=Order.customer.city))
+        db[Order].sorted(key=Order.customer.city)
+    with pytest.raises(ValueError, match="Customer.name is not a field of Order"):
+        db[Order].sorted(key=Customer.name)
 
 
 def test_slices(db):

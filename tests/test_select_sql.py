@@ -2,8 +2,8 @@ import sqlite3
 
 import pytest
 
-from inlay import Ref, all_of, entity, key
-from inlay.entity import meta
+from inlay import all_of, entity, key
+from inlay.meta import meta
 from inlay.sql import Query, aggregate_sql, create_table_sql, insert_sql, select_sql
 
 
@@ -13,13 +13,6 @@ class Customer:
     name: str
     city: str
     age: int
-
-
-@entity(indexes=[("customer",)])
-class Order:
-    id: str = key()
-    customer: Ref[Customer]
-    total: int
 
 
 RECORDS = [
@@ -131,12 +124,3 @@ def test_aggregates_of_nothing(conn):
     assert aggregate(conn, nothing, "COUNT") == 0
     assert aggregate(conn, nothing, "SUM", Customer.age) is None
     assert aggregate(conn, nothing, "MIN", Customer.age) is None
-
-
-def test_only_fields_of_the_class_itself_can_be_used():
-    with pytest.raises(ValueError, match="Order.total is not a field of Customer"):
-        select_sql(meta(Customer), Query().sorted((Order.total,), False))
-    with pytest.raises(ValueError, match="Customer.city is not a field of Order"):
-        select_sql(meta(Order), Query().sorted((Order.customer.city,), False))
-    with pytest.raises(ValueError, match="Order.total is not a field of Customer"):
-        aggregate_sql(meta(Customer), Query(), "SUM", Order.total)

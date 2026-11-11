@@ -2,8 +2,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from inlay.conditions import And, Compare, Condition, FieldRef, Match, Not, OneOf, Or, classes_read
-from inlay.entity import EntityMeta, FieldMeta, meta
+from inlay.conditions import And, Compare, CompareOp, Condition, FieldRef, Match, Not, OneOf, Or, classes_read, steps
+from inlay.meta import EntityMeta, FieldMeta, meta
 from inlay.types import SQL_TYPES, to_sql
 
 CONNECTION_SETUP = ("PRAGMA foreign_keys = ON", "PRAGMA journal_mode = WAL")
@@ -14,6 +14,8 @@ SAVEPOINT = "SAVEPOINT inlay"
 RELEASE = "RELEASE inlay"
 ROLLBACK_TO = "ROLLBACK TO inlay"
 LIST_TABLES = "SELECT name, sql FROM sqlite_master WHERE type = 'table'"
+
+type Aggregate = Literal["COUNT", "SUM", "MIN", "MAX"]
 
 
 def quote(name: str) -> str:
@@ -66,26 +68,27 @@ def clear_sql(m: EntityMeta, cond: Condition) -> tuple[str, list[object]]:
     return f"DELETE FROM {quote(m.table)} WHERE {where}", params
 
 
-_COMPARE_OPS = {"==": "=", "!=": "!=", "<": "<", "<=": "<=", ">": ">", ">=": ">="}
+def _sql_op(op: CompareOp) -> str:
+    return "=" if op == "==" else op
 
 
 def condition_sql(m: EntityMeta, cond: Condition) -> tuple[str, list[object]]:
     """The SQL for `cond` on the table of `m`, and its parameters in order. `cond` was checked by `check_condition`."""
     match cond:
         case Compare(left, op, FieldRef() as right):
-            return _on_path(m, left, f"{_column(left)} {_COMPARE_OPS[op]} {_column(right)}", [])
+            return _on_path(left, f"{_column(left)} {_sql_op(op)} {_column(right)}", [])
         case Compare(left, op, value):
-            return _on_path(m, left, f"{_column(left)} {_COMPARE_OPS[op]} ?", [to_sql(value)])
+            return _on_path(left, f"{_column(left)} {_sql_op(op)} ?", [to_sql(value)])
         case Match(field, "startswith", text):
-            return _on_path(m, field, f"substr({_column(field)}, 1, ?) = ?", [len(text), text])
+            return _on_path(field, f"substr({_column(field)}, 1, ?) = ?", [len(text), text])
         case Match(field, "endswith", text):
             column = _column(field)
-            return _on_path(m, field, f"substr({column}, length({column}) - ? + 1) = ?", [len(text), text])
+            return _on_path(field, f"substr({column}, length({column}) - ? + 1) = ?", [len(text), text])
         case Match(field, "contains", text):
-            return _on_path(m, field, f"instr({_column(field)}, ?) > 0", [text])
+            return _on_path(field, f"instr({_column(field)}, ?) > 0", [text])
         case OneOf(field, values):
             marks = ", ".join("?" * len(values))
-            return _on_path(m, field, f"{_column(field)} IN ({marks})", [to_sql(v) for v in values])
+            return _on_path(field, f"{_column(field)} IN ({marks})", [to_sql(v) for v in values])
         case And(items):
             return _join(m, items, " AND ", "1")
         case Or(items):
@@ -105,13 +108,12 @@ def _join(m: EntityMeta, items: Sequence[Condition], operator: str, empty: str) 
 
 
 def _column(ref: FieldRef) -> str:
-    return quote(meta(ref.owner).field(ref.name).column)
+    return quote(steps(ref)[-1].column)
 
 
-def _on_path(m: EntityMeta, ref: FieldRef, sql: str, params: list[object]) -> tuple[str, list[object]]:
-    """Wraps `sql`, a test on `ref`'s own table, in one subquery for each relation between `m` and that table."""
-    for owner, name in reversed(ref.via):
-        f = meta(owner).field(name)
+def _on_path(ref: FieldRef, sql: str, params: list[object]) -> tuple[str, list[object]]:
+    """Wraps `sql`, a test on `ref`'s own table, in one subquery for each relation that leads there."""
+    for f in reversed(steps(ref)[:-1]):
         assert f.target is not None
         target = meta(f.target)
         sql = f"{quote(f.column)} IN (SELECT {quote(target.key.column)} FROM {quote(target.table)} WHERE {sql})"
@@ -174,8 +176,8 @@ def select_sql(m: EntityMeta, query: Query) -> tuple[str, list[object]]:
         sql += f" WHERE {where}"
         params += where_params
     if query.order:
-        columns = [_own_column(m, f) + (" DESC" if descending else "") for f, descending in query.order]
-        if not any(f.name == m.key.name for f, _ in query.order):
+        columns = [_column(f) + (" DESC" if descending else "") for f, descending in query.order]
+        if not any(steps(f) == (m.key,) for f, _ in query.order):
             # The key breaks ties, so slices of the same order never repeat or skip a record.
             columns.append(quote(m.key.column))
         sql += f" ORDER BY {', '.join(columns)}"
@@ -186,19 +188,12 @@ def select_sql(m: EntityMeta, query: Query) -> tuple[str, list[object]]:
 
 
 def aggregate_sql(
-    m: EntityMeta, query: Query, function: Literal["COUNT", "SUM", "MIN", "MAX"], field: FieldRef | None = None
+    m: EntityMeta, query: Query, function: Aggregate, field: FieldRef | None = None
 ) -> tuple[str, list[object]]:
-    """One value computed over the records `query` picks: all of them for COUNT, else `field`."""
+    """One value computed over the records `query` picks: all of them for COUNT, else `field`, a field of `m` itself."""
     inner, params = select_sql(m, query)
-    column = "*" if field is None else _own_column(m, field)
+    column = "*" if field is None else _column(field)
     return f"SELECT {function}({column}) FROM ({inner})", params
-
-
-def _own_column(m: EntityMeta, ref: FieldRef) -> str:
-    """The column of a field of `m` itself: a field reached through a relation would need a join."""
-    if ref.via or ref.owner is not m.cls:
-        raise ValueError(f"{ref.owner.__name__}.{ref.name} is not a field of {m.cls.__name__}")
-    return _column(ref)
 
 
 def _columns(m: EntityMeta) -> str:

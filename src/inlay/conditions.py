@@ -1,8 +1,9 @@
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Literal
 
-type Hop = tuple[type, str]
+from inlay.meta import FieldMeta, meta
+
 type CompareOp = Literal["==", "!=", "<", "<=", ">", ">="]
 
 
@@ -38,8 +39,8 @@ class Compare(Condition):
     right: object
 
     def __post_init__(self) -> None:
-        right, left = self.right, self.left
-        if isinstance(right, FieldRef) and (right.owner, right.via) != (left.owner, left.via):
+        # `sql.condition_sql` wraps only the left field's relations in subqueries, so both fields need the same ones.
+        if isinstance(self.right, FieldRef) and _record(self.right) != _record(self.left):
             raise ValueError("only two fields of the same record can be compared")
 
 
@@ -71,16 +72,25 @@ class Not(Condition):
     item: Condition
 
 
-@dataclass(frozen=True, slots=True, eq=False)
 class FieldRef:
-    """A field of `owner`, reached from the filtered class through the relations in `via`.
+    """A field, reached from the filtered class through the relations before it.
 
+    The steps are the fields followed: each `Ref` field on the way, then the field itself.
+    A reference that ends on a `Ref` field has the fields of the class it points to as attributes.
     Comparing it builds a condition, so it has no equality or hash of its own.
     """
 
-    owner: type
-    name: str
-    via: tuple[Hop, ...]
+    # Name-mangled so it never hides a field of the class a `Ref` points to.
+    __slots__ = ("__steps",)
+
+    def __init__(self, steps: tuple[FieldMeta, ...]) -> None:
+        self.__steps = steps
+
+    def __getattr__(self, name: str) -> "FieldRef":
+        last = self.__steps[-1]
+        if last.target is None:
+            raise AttributeError(f"{last.owner.__name__}.{last.name} is not a Ref, so it has no field {name!r}")
+        return FieldRef((*self.__steps, meta(last.target).field(name)))
 
     def __eq__(self, other: object) -> Compare:  # type: ignore[override]
         return Compare(self, "==", other)
@@ -107,47 +117,23 @@ class FieldRef:
         return Match(self, "endswith", suffix)
 
 
-class Path:
-    """The object at the end of the relations in `via`; its attributes are that object's fields."""
+def steps(ref: FieldRef) -> tuple[FieldMeta, ...]:
+    # The slot is name-mangled, so outside the class it is only reachable by its mangled name.
+    return getattr(ref, "_FieldRef__steps")
 
-    # Name-mangled so they never hide a field of the target class.
-    __slots__ = ("__target", "__via")
 
-    def __init__(self, target: type, via: tuple[Hop, ...]) -> None:
-        object.__setattr__(self, "_Path__target", target)
-        object.__setattr__(self, "_Path__via", via)
-
-    def __getattr__(self, name: str) -> "FieldRef | Path":
-        node = getattr(self.__target, name)
-        if isinstance(node, FieldRef):
-            return FieldRef(node.owner, node.name, self.__via + node.via)
-        if isinstance(node, Path):
-            return Path(node.__target, self.__via + node.__via)
-        raise AttributeError(f"{self.__target.__name__} has no field {name!r}")
-
-    def __setattr__(self, name: str, value: object) -> None:
-        raise AttributeError("Path is immutable")
-
-    # Comparing a path with a key is the same as comparing the `Ref` field that ends it.
-    def __eq__(self, other: object) -> Compare:  # type: ignore[override]
-        return self.__inlay_field__() == other
-
-    def __ne__(self, other: object) -> Compare:  # type: ignore[override]
-        return self.__inlay_field__() != other
-
-    # A dunder name, so it never hides a field of the target class.
-    def __inlay_field__(self) -> FieldRef:
-        """The `Ref` field that ends this path."""
-        *via, (owner, name) = self.__via
-        return FieldRef(owner, name, tuple(via))
+def _record(ref: FieldRef) -> tuple[tuple[FieldMeta, ...], type]:
+    """Which record a field belongs to: the relations that reach it and its class."""
+    *via, last = steps(ref)
+    return tuple(via), last.owner
 
 
 def all_of(*conds: Condition | bool) -> And:
-    return And(cast(tuple[Condition, ...], conds))
+    return And(tuple(map(_as_condition, conds)))
 
 
 def any_of(*conds: Condition | bool) -> Or:
-    return Or(cast(tuple[Condition, ...], conds))
+    return Or(tuple(map(_as_condition, conds)))
 
 
 def none_of(*conds: Condition | bool) -> Not:
@@ -155,7 +141,14 @@ def none_of(*conds: Condition | bool) -> Not:
 
 
 def negate(cond: Condition | bool) -> Not:
-    return Not(cast(Condition, cond))
+    return Not(_as_condition(cond))
+
+
+# Type checkers see `Order.total > 100` as a `bool`, so a stray real `bool` must be caught at runtime.
+def _as_condition(value: object) -> Condition:
+    if not isinstance(value, Condition):
+        raise TypeError(f"expected a condition such as Order.total > 100, got {value!r}")
+    return value
 
 
 def contains(field: str, text: str) -> Match:
@@ -168,9 +161,6 @@ def one_of[T](field: T, values: Iterable[T]) -> OneOf:
 
 # Type checkers see `Order.total` as an `int`, so the functions that take a field are typed with its value type.
 def as_field(value: object) -> FieldRef:
-    """The field `value` stands for; a relation such as `Order.customer` stands for its `Ref` field."""
-    if isinstance(value, Path):
-        return value.__inlay_field__()
     if not isinstance(value, FieldRef):
         raise TypeError(f"expected a field such as Order.total, got {value!r}")
     return value
@@ -188,18 +178,28 @@ def fields(cond: Condition) -> Iterator[FieldRef]:
                 yield from fields(item)
         case Not(item):
             yield from fields(item)
-        case _:
-            raise TypeError(f"expected a condition, got {cond!r}")
 
 
 def check_condition(cls: type, cond: Condition) -> None:
     """Raise if `cond` tests a field that cannot be reached from `cls`."""
     for ref in fields(cond):
-        start = ref.via[0][0] if ref.via else ref.owner
-        if start is not cls:
-            raise ValueError(f"{ref.owner.__name__}.{ref.name} cannot be used on {cls.__name__}")
+        path = steps(ref)
+        if path[0].owner is not cls:
+            raise ValueError(f"{path[-1].owner.__name__}.{path[-1].name} cannot be used on {cls.__name__}")
+
+
+def as_own_field(cls: type, value: object) -> FieldRef:
+    """The field `value` stands for, which must be a field of `cls` itself.
+
+    `sql.select_sql` and `sql.aggregate_sql` use it as a plain column of the table; a related field would need a join.
+    """
+    ref = as_field(value)
+    *via, last = steps(ref)
+    if via or last.owner is not cls:
+        raise ValueError(f"{last.owner.__name__}.{last.name} is not a field of {cls.__name__}")
+    return ref
 
 
 def classes_read(cond: Condition) -> set[type]:
     """The classes whose tables are read to test `cond`: the one it applies to and those it reaches by relations."""
-    return {cls for ref in fields(cond) for cls in (ref.owner, *(owner for owner, _ in ref.via))}
+    return {f.owner for ref in fields(cond) for f in steps(ref)}

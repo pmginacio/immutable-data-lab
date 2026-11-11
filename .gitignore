@@ -12,6 +12,10 @@ wheels/
 # IDE
 .idea/
 
+# Session notes and scratch files
+session/
+scratchpad/
+
 # Databases made by running the examples
 *.db
 *.db-wal

@@ -3,7 +3,11 @@ import operator
 import pytest
 
 from inlay import Ref, all_of, any_of, contains, entity, key, negate, none_of, one_of
-from inlay.conditions import And, Compare, FieldRef, Match, Not, OneOf, Or, as_field, check_condition
+from inlay.conditions import And, Compare, FieldRef, Match, Not, OneOf, Or, as_field, check_condition, steps
+
+
+def path(ref: FieldRef) -> tuple[str, ...]:
+    return tuple(f"{f.owner.__name__}.{f.name}" for f in steps(ref))
 
 
 @entity(indexes=[("city",)])
@@ -38,36 +42,36 @@ def test_comparisons_build_conditions():
     ]:
         cond = fn(Order.total, 100)
         assert isinstance(cond, Compare)
-        assert (cond.left.name, cond.op, cond.right) == ("total", op, 100)
+        assert (path(cond.left), cond.op, cond.right) == (("Order.total",), op, 100)
 
 
 def test_value_on_the_left_is_flipped():
     cond = 100 < Order.total
     assert isinstance(cond, Compare)
-    assert (cond.left.name, cond.op, cond.right) == ("total", ">", 100)
+    assert (path(cond.left), cond.op, cond.right) == (("Order.total",), ">", 100)
 
 
 def test_two_columns_compare():
     cond = Order.total > Order.discount
     assert isinstance(cond, Compare)
     assert isinstance(cond.right, FieldRef)
-    assert (cond.left.name, cond.right.name) == ("total", "discount")
+    assert (path(cond.left), path(cond.right)) == (("Order.total",), ("Order.discount",))
 
 
 def test_related_field_compares_through_its_path():
     cond = Order.customer.city == "Lisbon"
     assert isinstance(cond, Compare)
-    assert (cond.left.owner, cond.left.name, cond.left.via) == (Customer, "city", ((Order, "customer"),))
+    assert path(cond.left) == ("Order.customer", "Customer.city")
 
 
 def test_path_compares_by_key():
     cond = Order.customer == "c1"
     assert isinstance(cond, Compare)
-    assert (cond.left.owner, cond.left.name, cond.left.via, cond.op, cond.right) == (Order, "customer", (), "==", "c1")
+    assert (path(cond.left), cond.op, cond.right) == (("Order.customer",), "==", "c1")
 
     deep = OrderLine.order.customer != "c1"
     assert isinstance(deep, Compare)
-    assert (deep.left.owner, deep.left.name, deep.left.via, deep.op) == (Order, "customer", ((OrderLine, "order"),), "!=")
+    assert (path(deep.left), deep.op) == (("OrderLine.order", "Order.customer"), "!=")
 
 
 def test_text_conditions():
@@ -77,13 +81,13 @@ def test_text_conditions():
         (contains(Customer.name, "n"), "contains"),
     ]:
         assert isinstance(cond, Match)
-        assert (cond.field.name, cond.kind) == ("name", kind)
+        assert (path(cond.field), cond.kind) == (("Customer.name",), kind)
 
 
 def test_one_of_takes_any_iterable():
     cond = one_of(Customer.city, {"Lisbon"})
     assert isinstance(cond, OneOf)
-    assert (cond.field.name, cond.values) == ("city", ("Lisbon",))
+    assert (path(cond.field), cond.values) == (("Customer.city",), ("Lisbon",))
 
 
 @pytest.mark.parametrize(
@@ -99,10 +103,9 @@ def test_functions_taking_a_field_reject_anything_else(mistake):
 
 
 def test_a_relation_stands_for_its_ref_field():
-    ref = as_field(OrderLine.order.customer)
-    assert (ref.owner, ref.name, ref.via) == (Order, "customer", ((OrderLine, "order"),))
+    assert path(as_field(OrderLine.order.customer)) == ("OrderLine.order", "Order.customer")
     cond = one_of(Order.customer, ["c1", "c2"])
-    assert (cond.field.owner, cond.field.name, cond.values) == (Order, "customer", ("c1", "c2"))
+    assert (path(cond.field), cond.values) == (("Order.customer",), ("c1", "c2"))
 
 
 def test_check_condition_rejects_fields_of_another_class():
@@ -111,9 +114,18 @@ def test_check_condition_rejects_fields_of_another_class():
         check_condition(Customer, Order.total > 1)
 
 
-def test_check_condition_rejects_a_plain_bool():
+@pytest.mark.parametrize(
+    "mistake",
+    [
+        lambda: all_of(Order.total > 1, True),
+        lambda: any_of(False),
+        lambda: negate(True),
+        lambda: (Order.total > 1) & True,
+    ],
+)
+def test_combinators_reject_a_plain_bool(mistake):
     with pytest.raises(TypeError, match="expected a condition"):
-        check_condition(Order, all_of(True))
+        mistake()
 
 
 @pytest.mark.parametrize(

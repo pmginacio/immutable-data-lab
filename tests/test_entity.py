@@ -5,8 +5,8 @@ from datetime import date, datetime
 import pytest
 
 from inlay import Ref, entity, key
-from inlay.conditions import FieldRef, Path
-from inlay.entity import FieldMeta, meta
+from inlay.conditions import FieldRef, steps
+from inlay.meta import FieldMeta, meta
 
 
 @entity(indexes=[("city", "name")])
@@ -64,42 +64,39 @@ def test_ref_value_on_object_is_the_key():
     assert Order(customer=ana.id, total=1).customer == ana.id
 
 
-def test_class_access_gives_field_refs_and_paths():
-    ref = Order.total
-    assert isinstance(ref, FieldRef)
-    assert (ref.owner, ref.name, ref.via) == (Order, "total", ())
-    assert isinstance(Order.customer, Path)
+def path(ref: FieldRef) -> tuple[str, ...]:
+    return tuple(f"{f.owner.__name__}.{f.name}" for f in steps(ref))
 
 
-def test_paths_follow_relations():
-    city = Order.customer.city
-    assert isinstance(city, FieldRef)
-    assert (city.owner, city.name, city.via) == (Customer, "city", ((Order, "customer"),))
+def test_class_access_gives_field_refs():
+    assert path(Order.total) == ("Order.total",)
+    assert path(Order.customer) == ("Order.customer",)
 
-    deep = OrderLine.order.customer.city
-    assert isinstance(deep, FieldRef)
-    assert deep.via == ((OrderLine, "order"), (Order, "customer"))
+
+def test_field_refs_follow_relations():
+    assert path(Order.customer.city) == ("Order.customer", "Customer.city")
+    assert path(OrderLine.order.customer.city) == ("OrderLine.order", "Order.customer", "Customer.city")
 
 
 def test_self_reference():
-    name = Category.parent.parent.name
-    assert isinstance(name, FieldRef)
-    assert name.via == ((Category, "parent"), (Category, "parent"))
+    assert path(Category.parent.parent.name) == ("Category.parent", "Category.parent", "Category.name")
 
 
 def test_unknown_field_raises():
     with pytest.raises(AttributeError):
         Order.totl
-    with pytest.raises(AttributeError):
+    with pytest.raises(AttributeError, match="Customer has no field 'nmae'"):
         Order.customer.nmae
+    with pytest.raises(AttributeError, match="Order.total is not a Ref"):
+        Order.total.name
 
 
 def test_meta():
     m = meta(Order)
     id_, customer, total = m.fields
-    assert id_ == FieldMeta("id", "id", str, is_key=True)
-    assert customer == FieldMeta("customer", "customer_id", str, ref=Customer)
-    assert total == FieldMeta("total", "total", int)
+    assert id_ == FieldMeta(Order, "id", "id", str, is_key=True)
+    assert customer == FieldMeta(Order, "customer", "customer_id", str, ref=Customer)
+    assert total == FieldMeta(Order, "total", "total", int)
     assert (m.cls, m.table, m.key, m.indexes) == (Order, "order", id_, ((customer,), (total,)))
     assert customer.target is Customer
     assert meta(OrderLine).table == "lines"
@@ -200,6 +197,15 @@ def test_rejects_non_str_key():
         @entity
         class Bad:
             id: int = key()
+
+
+def test_rejects_field_names_used_by_field_references():
+    with pytest.raises(TypeError, match="cannot have fields named startswith"):
+
+        @entity
+        class Bad:
+            id: str = key()
+            startswith: str
 
 
 def test_rejects_empty_index():

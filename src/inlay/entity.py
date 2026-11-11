@@ -1,14 +1,17 @@
 import re
 import uuid
-from annotationlib import Format, ForwardRef, get_annotations
+from annotationlib import Format, get_annotations
 from collections.abc import Callable, Sequence
 from dataclasses import Field, dataclass, field, fields
 from typing import Any, dataclass_transform, get_args, get_origin, overload
 
-from inlay.conditions import FieldRef, Path
+from inlay.conditions import FieldRef
+from inlay.meta import EntityMeta, FieldMeta
 from inlay.types import SQL_TYPES
 
 _KEY = "inlay_key"
+# Reading `Order.customer.startswith` gives the method, so a field with that name could not be reached.
+_FIELD_REF_METHODS = {name for name in vars(FieldRef) if not name.startswith("_")}
 
 
 def key() -> Any:
@@ -33,47 +36,8 @@ class Ref[T]:
         raise NotImplementedError
 
 
-@dataclass(frozen=True, slots=True)
-class FieldMeta:
-    name: str
-    column: str
-    py_type: type
-    is_key: bool = False
-    # What a `Ref` field points to, as written; a forward reference until that class exists.
-    ref: type | ForwardRef | None = None
-
-    @property
-    def target(self) -> type | None:
-        """The class a `Ref` field points to, or None for other fields."""
-        return self.ref.evaluate() if isinstance(self.ref, ForwardRef) else self.ref
-
-
-@dataclass(frozen=True, slots=True)
-class EntityMeta:
-    cls: type
-    table: str
-    fields: tuple[FieldMeta, ...]
-    indexes: tuple[tuple[FieldMeta, ...], ...]
-
-    @property
-    def key(self) -> FieldMeta:
-        return next(f for f in self.fields if f.is_key)
-
-    def field(self, name: str) -> FieldMeta:
-        return next(f for f in self.fields if f.name == name)
-
-
-def meta(cls: type) -> EntityMeta:
-    m = cls.__dict__.get("__inlay__")
-    if not isinstance(m, EntityMeta):
-        raise TypeError(f"{cls.__name__} is not an @entity class")
-    return m
-
-
 class _Field:
-    """Wraps a slot: the value on objects, a `FieldRef` or `Path` on the class."""
-
-    __slots__ = ("_slot", "_meta")
+    """Wraps a slot: the value on objects, a `FieldRef` on the class."""
 
     def __init__(self, slot: Any, meta: FieldMeta) -> None:
         self._slot = slot
@@ -82,11 +46,7 @@ class _Field:
     def __get__(self, obj: object, owner: type | None = None) -> Any:
         if obj is not None:
             return self._slot.__get__(obj, owner)
-        assert owner is not None
-        target = self._meta.target
-        if target is None:
-            return FieldRef(owner, self._meta.name, ())
-        return Path(target, ((owner, self._meta.name),))
+        return FieldRef((self._meta,))
 
     def __set__(self, obj: object, value: object) -> None:
         self._slot.__set__(obj, value)
@@ -103,34 +63,37 @@ def entity(
     cls: type | None = None, /, *, table: str | None = None, indexes: Sequence[tuple[str, ...]] = ()
 ) -> Any:
     def wrap(c: type) -> type:
-        return _build(c, table or _snake_case(c.__name__), tuple(tuple(i) for i in indexes))
+        return _make_entity(c, table or _snake_case(c.__name__), tuple(tuple(i) for i in indexes))
 
     return wrap if cls is None else wrap(cls)
 
 
-def _build(cls: type, table: str, indexes: tuple[tuple[str, ...], ...]) -> type:
+def _make_entity(cls: type, table: str, indexes: tuple[tuple[str, ...], ...]) -> type:
     new = dataclass(frozen=True, slots=True, kw_only=True)(cls)
-    # FORWARDREF leaves names that do not exist yet, such as the class itself, as forward references.
-    hints = get_annotations(cls, format=Format.FORWARDREF)
-    field_metas = tuple(_field_meta(cls.__name__, f, hints[f.name]) for f in fields(new))
-    _check(cls.__name__, field_metas, indexes)
-    by_name = {f.name: f for f in field_metas}
-    index_metas = tuple(tuple(by_name[name] for name in index) for index in indexes)
-
-    setattr(new, "__inlay__", EntityMeta(new, table, field_metas, index_metas))
-    for f in field_metas:
+    m = _entity_meta(new, table, indexes)
+    setattr(new, "__inlay__", m)
+    for f in m.fields:
         setattr(new, f.name, _Field(new.__dict__[f.name], f))
     return new
 
 
-def _field_meta(cls_name: str, f: Field[Any], hint: Any) -> FieldMeta:
+def _entity_meta(cls: type, table: str, indexes: tuple[tuple[str, ...], ...]) -> EntityMeta:
+    # FORWARDREF leaves names that do not exist yet, such as the class itself, as forward references.
+    hints = get_annotations(cls, format=Format.FORWARDREF)
+    field_metas = tuple(_field_meta(cls, f, hints[f.name]) for f in fields(cls))
+    _check(cls.__name__, field_metas, indexes)
+    by_name = {f.name: f for f in field_metas}
+    return EntityMeta(cls, table, field_metas, tuple(tuple(by_name[name] for name in index) for index in indexes))
+
+
+def _field_meta(owner: type, f: Field[Any], hint: Any) -> FieldMeta:
     is_key = bool(f.metadata.get(_KEY))
     if get_origin(hint) is Ref:
         (ref,) = get_args(hint)
-        return FieldMeta(f.name, f"{f.name}_id", str, is_key, ref)
+        return FieldMeta(owner, f.name, f"{f.name}_id", str, is_key, ref)
     if hint not in SQL_TYPES:
-        raise TypeError(f"{cls_name}.{f.name} has unsupported type {hint!r}")
-    return FieldMeta(f.name, f.name, hint, is_key)
+        raise TypeError(f"{owner.__name__}.{f.name} has unsupported type {hint!r}")
+    return FieldMeta(owner, f.name, f.name, hint, is_key)
 
 
 def _check(cls_name: str, field_metas: tuple[FieldMeta, ...], indexes: tuple[tuple[str, ...], ...]) -> None:
@@ -139,6 +102,9 @@ def _check(cls_name: str, field_metas: tuple[FieldMeta, ...], indexes: tuple[tup
         raise TypeError(f"{cls_name} needs exactly one field declared with key(), found {len(keys)}")
     if keys[0].py_type is not str or keys[0].ref is not None:
         raise TypeError(f"{cls_name}.{keys[0].name} is the key and must be a str")
+
+    if clashes := [f.name for f in field_metas if f.name in _FIELD_REF_METHODS]:
+        raise TypeError(f"{cls_name} cannot have fields named {', '.join(clashes)}: field references use these names")
 
     columns = [f.column for f in field_metas]
     for column in columns:

@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Final, Literal, Self, overload
 
-from inlay.conditions import Condition, FieldRef, all_of, as_field, check_condition
-from inlay.entity import EntityMeta, meta
+from inlay.conditions import Condition, FieldRef, all_of, as_own_field, check_condition, steps
+from inlay.meta import EntityMeta, meta
 from inlay.sql import (
     BEGIN,
     COMMIT,
@@ -18,6 +18,7 @@ from inlay.sql import (
     ROLLBACK,
     ROLLBACK_TO,
     SAVEPOINT,
+    Aggregate,
     Query,
     aggregate_sql,
     clear_sql,
@@ -81,7 +82,7 @@ class RecordView[T]:
     def __contains__(self, record: object) -> bool:
         if type(record) is not self._meta.cls:
             return False
-        equal = (getattr(self._meta.cls, f.name) == getattr(record, f.name) for f in self._meta.fields)
+        equal = (FieldRef((f,)) == getattr(record, f.name) for f in self._meta.fields)
         return len(self.filter(*equal)) > 0
 
     def __getitem__(self, s: slice) -> "RecordView[T]":
@@ -100,18 +101,17 @@ class RecordView[T]:
     def sorted(self, *, key: Any, reverse: bool = False) -> "RecordView[T]":
         """`key` is a field, or a tuple of fields."""
         fields = key if isinstance(key, tuple) else (key,)
-        return self._view(self._query.sorted(tuple(map(as_field, fields)), reverse))
+        return self._view(self._query.sorted(tuple(as_own_field(self._meta.cls, f) for f in fields), reverse))
 
     def get(self, key: str) -> T | None:
-        key_field = FieldRef(self._meta.cls, self._meta.key.name, ())
-        return next(iter(self.filter(key_field == key)), None)
+        return next(iter(self.filter(FieldRef((self._meta.key,)) == key)), None)
 
     @overload
     def sum(self, field: int) -> int: ...
     @overload
     def sum(self, field: float) -> float: ...
     def sum(self, field: Any) -> Any:
-        return self._aggregate("SUM", as_field(field)) or 0
+        return self._aggregate("SUM", as_own_field(self._meta.cls, field)) or 0
 
     @overload
     def min[V](self, field: V) -> V: ...
@@ -128,10 +128,10 @@ class RecordView[T]:
         return self._extreme("MAX", field, default)
 
     def _extreme(self, function: Literal["MIN", "MAX"], field: Any, default: object) -> Any:
-        ref = as_field(field)
+        ref = as_own_field(self._meta.cls, field)
         value = self._aggregate(function, ref)
         if value is not None:
-            return from_sql(value, self._meta.field(ref.name).py_type)
+            return from_sql(value, steps(ref)[-1].py_type)
         if default is _MISSING:
             raise ValueError(f"{function.lower()}() of an empty view")
         return default
@@ -139,7 +139,7 @@ class RecordView[T]:
     def _view(self, query: Query) -> "RecordView[T]":
         return RecordView(self._conn, self._meta, self._reading, query)
 
-    def _aggregate(self, function: Literal["COUNT", "SUM", "MIN", "MAX"], field: FieldRef | None = None) -> Any:
+    def _aggregate(self, function: Aggregate, field: FieldRef | None = None) -> Any:
         sql, params = aggregate_sql(self._meta, self._query, function, field)
         return self._conn.execute(sql, params).fetchone()[0]
 

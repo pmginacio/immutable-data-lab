@@ -4,7 +4,7 @@ from datetime import datetime
 import pytest
 
 from inlay import Ref, all_of, any_of, contains, entity, key, negate, none_of, one_of
-from inlay.entity import meta
+from inlay.meta import meta
 from inlay.sql import condition_sql, create_table_sql, insert_sql, quote
 
 

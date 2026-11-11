@@ -256,8 +256,9 @@ Only the `db` module talks to SQLite.
 
 | Module | Job |
 |---|---|
-| `entity` | the `@entity` decorator, `key`, `Ref`, and the metadata about each class |
-| `conditions` | fields, relation paths, and the condition tree |
+| `meta` | the metadata about each class and its fields |
+| `entity` | the `@entity` decorator, `key` and `Ref` |
+| `conditions` | field references and the condition tree |
 | `types` | Python types to SQLite types, and back |
 | `sql` | pure functions that build one SQL statement or clause each |
 | `db` | `open`, the db, record sets and views, and transactions |
