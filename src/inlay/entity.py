@@ -5,7 +5,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import Field, dataclass, field, fields
 from typing import Any, dataclass_transform, get_args, get_origin, overload
 
-from inlay.expr import FieldRef, Path
+from inlay.conditions import FieldRef, Path
 from inlay.types import SQL_TYPES
 
 _KEY = "inlay_key"

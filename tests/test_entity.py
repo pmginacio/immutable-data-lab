@@ -5,8 +5,8 @@ from datetime import date, datetime
 import pytest
 
 from inlay import Ref, entity, key
+from inlay.conditions import FieldRef, Path
 from inlay.entity import FieldMeta, meta
-from inlay.expr import FieldRef, Path
 
 
 @entity(indexes=[("city", "name")])
