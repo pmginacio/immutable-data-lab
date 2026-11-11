@@ -183,8 +183,10 @@ def select_sql(m: EntityMeta, query: Query) -> tuple[str, list[object]]:
         params += where_params
     if query.order:
         columns = [_own_column(m, f) + (" DESC" if descending else "") for f, descending in query.order]
-        # The key breaks ties, so slices of the same order never repeat or skip a record.
-        sql += f" ORDER BY {', '.join(columns)}, {quote(m.key.column)}"
+        if not any(f.name == m.key.name for f, _ in query.order):
+            # The key breaks ties, so slices of the same order never repeat or skip a record.
+            columns.append(quote(m.key.column))
+        sql += f" ORDER BY {', '.join(columns)}"
     if query.limit is not None or query.offset:
         sql += " LIMIT ? OFFSET ?"
         params += [-1 if query.limit is None else query.limit, query.offset]
