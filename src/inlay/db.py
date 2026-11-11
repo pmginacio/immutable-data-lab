@@ -254,7 +254,7 @@ def _store_errors() -> Iterator[None]:
             case "SQLITE_CONSTRAINT_PRIMARYKEY":
                 raise AlreadyExists(str(e)) from e
             case "SQLITE_CONSTRAINT_FOREIGNKEY":
-                raise BrokenRef("a Ref would point to an object that is not stored") from e
+                raise BrokenRef("a Ref would point to a record that is not stored") from e
         raise
 
 
