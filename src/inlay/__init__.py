@@ -1,4 +1,4 @@
-from inlay.db import AlreadyExists, BrokenRef, Db, Missing, SchemaMismatch, StoreError, Table, open
+from inlay.db import AlreadyExists, BrokenRef, Db, Missing, RecordSet, SchemaMismatch, StoreError, open
 from inlay.entity import Ref, entity, key
 
 __all__ = [
@@ -6,10 +6,10 @@ __all__ = [
     "BrokenRef",
     "Db",
     "Missing",
+    "RecordSet",
     "Ref",
     "SchemaMismatch",
     "StoreError",
-    "Table",
     "entity",
     "key",
     "open",

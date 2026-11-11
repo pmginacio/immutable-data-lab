@@ -49,7 +49,7 @@ class BrokenRef(StoreError):
 
 
 @dataclass(frozen=True, slots=True)
-class Table[T]:
+class RecordSet[T]:
     _conn: sqlite3.Connection
     _meta: EntityMeta
 
@@ -73,8 +73,8 @@ class Db:
         self._conn = conn
         self._metas = metas
 
-    def __getitem__[T](self, cls: type[T]) -> Table[T]:
-        return Table(self._conn, self._meta(cls))
+    def __getitem__[T](self, cls: type[T]) -> RecordSet[T]:
+        return RecordSet(self._conn, self._meta(cls))
 
     def transaction(self) -> AbstractContextManager[None]:
         return _transaction(self._conn)
