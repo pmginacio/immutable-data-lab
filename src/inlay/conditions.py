@@ -166,5 +166,24 @@ def as_field(value: object) -> FieldRef:
     return value
 
 
+def classes_read(cond: Condition) -> set[type]:
+    """The classes whose tables are read to test `cond`: the one it applies to and those it reaches by relations."""
+    match cond:
+        case Compare(left, _, FieldRef() as right):
+            return _classes(left) | _classes(right)
+        case Compare(field, _, _) | Match(field, _, _) | OneOf(field, _):
+            return _classes(field)
+        case And(items) | Or(items):
+            return set().union(*map(classes_read, items))
+        case Not(item):
+            return classes_read(item)
+        case _:
+            raise TypeError(f"expected a condition, got {cond!r}")
+
+
+def _classes(ref: FieldRef) -> set[type]:
+    return {owner for owner, _ in ref.via} | {ref.owner}
+
+
 def _conditions(conds: Iterable[Condition | bool]) -> tuple[Condition, ...]:
     return cast(tuple[Condition, ...], tuple(conds))

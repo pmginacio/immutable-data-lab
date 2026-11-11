@@ -1,5 +1,6 @@
 import os
 import sqlite3
+from collections import Counter
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
@@ -60,12 +61,19 @@ class RecordView[T]:
 
     _conn: sqlite3.Connection
     _meta: EntityMeta
+    _reading: Counter[type]
     _query: Query = Query()
 
     def __iter__(self) -> Iterator[T]:
         sql, params = select_sql(self._meta, self._query)
-        for row in self._conn.execute(sql, params):
-            yield _from_row(self._meta, row)
+        classes = self._query.reads() | {self._meta.cls}
+        # SQLite does not say what an open SELECT returns once its tables change, so writes to them are refused.
+        self._reading.update(classes)
+        try:
+            for row in self._conn.execute(sql, params):
+                yield _from_row(self._meta, row)
+        finally:
+            self._reading.subtract(classes)
 
     def __len__(self) -> int:
         return self._aggregate("COUNT")
@@ -127,7 +135,7 @@ class RecordView[T]:
         return default
 
     def _view(self, query: Query) -> "RecordView[T]":
-        return RecordView(self._conn, self._meta, query)
+        return RecordView(self._conn, self._meta, self._reading, query)
 
     def _aggregate(self, function: Literal["COUNT", "SUM", "MIN", "MAX"], field: FieldRef | None = None) -> Any:
         sql, params = aggregate_sql(self._meta, self._query, function, field)
@@ -139,6 +147,7 @@ class RecordSet[T](RecordView[T]):
     """All the records of one class. Unlike a view, it can also delete."""
 
     def delete(self, *keys: str) -> None:
+        _check_idle(self._reading, [self._meta.cls])
         with _transaction(self._conn):
             deleted = self._conn.executemany(delete_by_key_sql(self._meta), [(k,) for k in keys]).rowcount
             if deleted != len(keys):
@@ -146,6 +155,7 @@ class RecordSet[T](RecordView[T]):
 
     def clear(self, *conds: Condition | bool) -> None:
         sql, params = clear_sql(self._meta, all_of(*conds).items)
+        _check_idle(self._reading, [self._meta.cls])
         with _transaction(self._conn):
             self._conn.execute(sql, params)
 
@@ -154,9 +164,10 @@ class Db:
     def __init__(self, conn: sqlite3.Connection, metas: Mapping[type, EntityMeta]) -> None:
         self._conn = conn
         self._metas = metas
+        self._reading: Counter[type] = Counter()
 
     def __getitem__[T](self, cls: type[T]) -> RecordSet[T]:
-        return RecordSet(self._conn, self._meta(cls))
+        return RecordSet(self._conn, self._meta(cls), self._reading)
 
     def transaction(self) -> AbstractContextManager[None]:
         return _transaction(self._conn)
@@ -168,8 +179,10 @@ class Db:
         self._write(upsert_sql, objs)
 
     def remove(self, *objs: object) -> None:
+        groups = self._grouped(objs)
+        _check_idle(self._reading, [m.cls for m, _ in groups])
         with _transaction(self._conn):
-            for m, group in self._grouped(objs):
+            for m, group in groups:
                 deleted = self._conn.executemany(delete_equal_sql(m), [_row(m, o) for o in group]).rowcount
                 if deleted != len(group):
                     raise Missing(f"{len(group) - deleted} of the {m.cls.__name__} records are not stored")
@@ -199,9 +212,18 @@ class Db:
         return [(self._meta(cls), [o for o in objs if type(o) is cls]) for cls in classes]
 
     def _write(self, sql_for: Callable[[EntityMeta], str], objs: Sequence[object]) -> None:
+        groups = self._grouped(objs)
+        _check_idle(self._reading, [m.cls for m, _ in groups])
         with _transaction(self._conn):
-            for m, group in self._grouped(objs):
+            for m, group in groups:
                 self._conn.executemany(sql_for(m), [_row(m, o) for o in group])
+
+
+def _check_idle(reading: Counter[type], classes: Iterable[type]) -> None:
+    """Raise if an iteration that is still open reads the table of one of `classes`."""
+    for cls in classes:
+        if reading[cls] > 0:
+            raise RuntimeError(f"{cls.__name__} changed during iteration")
 
 
 # ROLLBACK TO leaves the savepoint open, so it is released as well.

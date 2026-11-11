@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from inlay.conditions import And, Compare, Condition, FieldRef, Match, Not, OneOf, Or, all_of
+from inlay.conditions import And, Compare, Condition, FieldRef, Match, Not, OneOf, Or, all_of, classes_read
 from inlay.entity import EntityMeta, FieldMeta, meta
 from inlay.types import SQL_TYPES, to_sql
 
@@ -153,6 +153,13 @@ class Query:
     def sliced(self, start: int, stop: int | None) -> "Query":
         q = self._open()
         return replace(q, limit=None if stop is None else max(stop - start, 0), offset=start)
+
+    def reads(self) -> set[type]:
+        """The classes that the conditions of this query and of its sources apply to or reach by relations."""
+        found: set[type] = set().union(*map(classes_read, self.where))
+        if self.source is not None:
+            found |= self.source.reads()
+        return found
 
     def _open(self) -> "Query":
         """This query if it can still take conditions, an order or a slice, or else a new query on top of it."""
