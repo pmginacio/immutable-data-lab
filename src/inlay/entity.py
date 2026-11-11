@@ -59,6 +59,9 @@ class EntityMeta:
     def key(self) -> FieldMeta:
         return next(f for f in self.fields if f.is_key)
 
+    def field(self, name: str) -> FieldMeta:
+        return next(f for f in self.fields if f.name == name)
+
 
 def meta(cls: type) -> EntityMeta:
     m = cls.__dict__.get("__inlay__")
