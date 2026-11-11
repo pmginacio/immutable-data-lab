@@ -1,6 +1,8 @@
 from collections.abc import Sequence
+from dataclasses import dataclass, replace
+from typing import Literal
 
-from inlay.conditions import And, Compare, Condition, FieldRef, Match, Not, OneOf, Or
+from inlay.conditions import And, Compare, Condition, FieldRef, Match, Not, OneOf, Or, all_of
 from inlay.entity import EntityMeta, FieldMeta, meta
 from inlay.types import SQL_TYPES, to_sql
 
@@ -121,6 +123,80 @@ def _on_path(m: EntityMeta, ref: FieldRef, sql: str, params: list[object]) -> tu
         target = meta(f.target)
         sql = f"{quote(f.column)} IN (SELECT {quote(target.key.column)} FROM {quote(target.table)} WHERE {sql})"
     return sql, params
+
+
+# No `==`, for the same reason as the conditions: it would compare their fields.
+@dataclass(frozen=True, slots=True, eq=False)
+class Query:
+    """The records a view picks: conditions, then order, then a slice.
+
+    A slice is applied last, so once a query is sliced, what comes next works on the slice:
+    it becomes the `source` of a new query.
+    """
+
+    where: tuple[Condition, ...] = ()
+    order: tuple[tuple[FieldRef, bool], ...] = ()  # each field with whether it sorts descending
+    limit: int | None = None
+    offset: int = 0
+    source: "Query | None" = None
+
+    def filter(self, conds: tuple[Condition, ...]) -> "Query":
+        q = self._open()
+        return replace(q, where=q.where + conds)
+
+    def sorted(self, fields: tuple[FieldRef, ...], reverse: bool) -> "Query":
+        # Like sorting twice with the built-in `sorted`: the last sort is the main one, the earlier ones break ties.
+        q = self._open()
+        return replace(q, order=tuple((f, reverse) for f in fields) + q.order)
+
+    def sliced(self, start: int, stop: int | None) -> "Query":
+        q = self._open()
+        return replace(q, limit=None if stop is None else max(stop - start, 0), offset=start)
+
+    def _open(self) -> "Query":
+        """This query if it can still take conditions, an order or a slice, or else a new query on top of it."""
+        if self.limit is None and not self.offset:
+            return self
+        return Query(order=self.order, source=self)
+
+
+def select_sql(m: EntityMeta, query: Query) -> tuple[str, list[object]]:
+    """A SELECT of every column of the records `query` picks, and its parameters in order."""
+    params: list[object] = []
+    if query.source is None:
+        source = quote(m.table)
+    else:
+        inner, params = select_sql(m, query.source)
+        source = f"({inner})"
+    sql = f"SELECT {_columns(m)} FROM {source}"
+    if query.where:
+        where, where_params = condition_sql(m, all_of(*query.where))
+        sql += f" WHERE {where}"
+        params += where_params
+    if query.order:
+        columns = [_own_column(m, f) + (" DESC" if descending else "") for f, descending in query.order]
+        # The key breaks ties, so slices of the same order never repeat or skip a record.
+        sql += f" ORDER BY {', '.join(columns)}, {quote(m.key.column)}"
+    if query.limit is not None or query.offset:
+        sql += " LIMIT ? OFFSET ?"
+        params += [-1 if query.limit is None else query.limit, query.offset]
+    return sql, params
+
+
+def aggregate_sql(
+    m: EntityMeta, query: Query, function: Literal["COUNT", "SUM", "MIN", "MAX"], field: FieldRef | None = None
+) -> tuple[str, list[object]]:
+    """One value computed over the records `query` picks: all of them for COUNT, else `field`."""
+    inner, params = select_sql(m, query)
+    column = "*" if field is None else _own_column(m, field)
+    return f"SELECT {function}({column}) FROM ({inner})", params
+
+
+def _own_column(m: EntityMeta, ref: FieldRef) -> str:
+    """The column of a field of `m` itself: a field reached through a relation would need a join."""
+    if ref.via or ref.owner is not m.cls:
+        raise ValueError(f"{ref.owner.__name__}.{ref.name} is not a field of {m.cls.__name__}")
+    return _column(ref)
 
 
 def _columns(m: EntityMeta) -> str:
