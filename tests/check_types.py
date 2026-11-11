@@ -6,7 +6,7 @@ Each `# type: ignore` marks an expected error; pyright reports any that is no lo
 from dataclasses import replace
 from typing import assert_type
 
-from inlay import Db, RecordSet, Ref, all_of, any_of, contains, entity, key, negate, none_of, one_of
+from inlay import Db, RecordSet, RecordView, Ref, all_of, any_of, contains, entity, key, negate, none_of, one_of
 from inlay.conditions import And
 
 
@@ -39,6 +39,12 @@ assert_type(replace(o, total=150), Order)
 def _tables(db: Db) -> None:
     assert_type(db[Customer], RecordSet[Customer])
     assert_type(db[Customer].get("c1"), Customer | None)
+    view = db[Order].filter(Order.total > 100).sorted(key=Order.total)[:10]
+    assert_type(view, RecordView[Order])
+    assert_type(view.get("o1"), Order | None)
+    assert_type(len(view), int)
+    for order in view:
+        assert_type(order, Order)
 
 
 def _conditions() -> None:

@@ -4,8 +4,9 @@ from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, S
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, Literal, Self
 
+from inlay.conditions import Condition, FieldRef, all_of, as_field
 from inlay.entity import EntityMeta, meta
 from inlay.sql import (
     BEGIN,
@@ -16,13 +17,15 @@ from inlay.sql import (
     ROLLBACK,
     ROLLBACK_TO,
     SAVEPOINT,
+    Query,
+    aggregate_sql,
     clear_sql,
     create_index_sql,
     create_table_sql,
     delete_by_key_sql,
     delete_equal_sql,
     insert_sql,
-    select_by_key_sql,
+    select_sql,
     upsert_sql,
 )
 from inlay.types import from_sql, to_sql
@@ -48,14 +51,53 @@ class BrokenRef(StoreError):
     pass
 
 
-@dataclass(frozen=True, slots=True)
-class RecordSet[T]:
+@dataclass(frozen=True, slots=True, eq=False)
+class RecordView[T]:
+    """A lazy, read-only collection of records. Every read runs its query again."""
+
     _conn: sqlite3.Connection
     _meta: EntityMeta
+    _query: Query = Query()
+
+    def __iter__(self) -> Iterator[T]:
+        sql, params = select_sql(self._meta, self._query)
+        for row in self._conn.execute(sql, params):
+            yield _from_row(self._meta, row)
+
+    def __len__(self) -> int:
+        return self._aggregate("COUNT")
+
+    def __getitem__(self, s: slice) -> "RecordView[T]":
+        if not isinstance(s, slice):
+            raise TypeError("a view can only be sliced, as in view[:10]")
+        start, stop = s.start or 0, s.stop
+        if s.step is not None or start < 0 or (stop is not None and stop < 0):
+            raise ValueError("a slice takes a start and a stop, and no negative numbers")
+        return self._view(self._query.sliced(start, stop))
+
+    def filter(self, *conds: Condition | bool) -> "RecordView[T]":
+        return self._view(self._query.filter(all_of(*conds).items))
+
+    def sorted(self, *, key: Any, reverse: bool = False) -> "RecordView[T]":
+        """`key` is a field, or a tuple of fields."""
+        fields = key if isinstance(key, tuple) else (key,)
+        return self._view(self._query.sorted(tuple(map(as_field, fields)), reverse))
 
     def get(self, key: str) -> T | None:
-        row = self._conn.execute(select_by_key_sql(self._meta), (key,)).fetchone()
-        return None if row is None else _from_row(self._meta, row)
+        key_field = FieldRef(self._meta.cls, self._meta.key.name, ())
+        return next(iter(self.filter(key_field == key)), None)
+
+    def _view(self, query: Query) -> "RecordView[T]":
+        return RecordView(self._conn, self._meta, query)
+
+    def _aggregate(self, function: Literal["COUNT", "SUM", "MIN", "MAX"], field: FieldRef | None = None) -> Any:
+        sql, params = aggregate_sql(self._meta, self._query, function, field)
+        return self._conn.execute(sql, params).fetchone()[0]
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class RecordSet[T](RecordView[T]):
+    """All the records of one class. Unlike a view, it can also delete."""
 
     def delete(self, *keys: str) -> None:
         with _transaction(self._conn):

@@ -42,10 +42,6 @@ def _column_def(f: FieldMeta) -> str:
     return sql
 
 
-def select_by_key_sql(m: EntityMeta) -> str:
-    return f"SELECT {_columns(m)} FROM {quote(m.table)} WHERE {quote(m.key.column)} = ?"
-
-
 def insert_sql(m: EntityMeta) -> str:
     return f"INSERT INTO {quote(m.table)} ({_columns(m)}) VALUES ({', '.join('?' * len(m.fields))})"
 
