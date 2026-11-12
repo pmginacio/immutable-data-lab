@@ -76,3 +76,14 @@ For reference, the idiomatic ways to group in Python, and when each fits:
   The input must be sorted by the key, or the same key silently shows up as several groups; inlay can do that sort in SQLite with `sorted(key=...)`.
 - **Asking SQLite for one number per group**, with one filtered view per group and `len` or `sum`.
   Best when the groups are ranges or values inlay can filter by, because no records are loaded.
+
+## Update, 2026-11-12
+
+Idea 4 is done.
+Values can be computed (arithmetic, `to_month`, `to_day`) in filters, sorts and aggregates, and `aggregate_by` groups by them in SQLite.
+The monthly report is now two queries for the whole table instead of two per month, and it prints the same report as before on the real data.
+`aggregate_by` also covers most of ideas 2 and 3: each number is one query for all the groups at once.
+
+`daily` and `hours` still group in Python.
+They need a business day that starts at 6:00, which takes date arithmetic or an offset, and the hour and weekday of a `datetime`.
+Those were left out on purpose, so the functions can be designed as a whole later rather than fitted to this one example.

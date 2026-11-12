@@ -23,7 +23,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import inlay
-from inlay import Db, Ref, entity, key
+from inlay import Db, Ref, entity, key, to_month
 
 # The bar closes after midnight, so a sale before this hour belongs to the day before.
 DAY_STARTS_AT = timedelta(hours=6)
@@ -124,25 +124,23 @@ def import_files(db: Db, paths: Sequence[Path]) -> None:
 # ---------------------------------------------------------------------------
 # The reports
 #
-# inlay: there is no GROUP BY. A report either asks SQLite for one number per group (`len`, `sum`),
-# or reads the records it needs and groups them in Python.
+# inlay: `aggregate_by` asks SQLite for one number per group, such as the revenue of each month.
+# Groups that inlay cannot compute, such as a business day that starts at 6:00, are built in Python
+# from the records a view returns.
 # ---------------------------------------------------------------------------
 
 
 def monthly(db: Db) -> None:
     invoices = db[Invoice]
-    # inlay: `min` and `max` run in SQLite and return the field's value, here a datetime.
-    years = range(invoices.min(Invoice.at).year, invoices.max(Invoice.at).year + 1)
-    rows = []
-    for month in range(1, 13):
-        cells = []
-        for year in years:
-            start = datetime(year, month, 1)
-            # inlay: one view per cell. `len` and `sum` each run one query, and no invoice is loaded.
-            in_month = invoices.filter(Invoice.at >= start, Invoice.at < _next_month(start))
-            count = len(in_month)
-            cells.append(f"{money(in_month.sum(Invoice.total))} ({count})" if count else "")
-        rows.append([calendar.month_abbr[month], *cells])
+    # inlay: two queries for the whole table, and no invoice is loaded. The keys are dates, the first of each month.
+    revenue = invoices.aggregate_by(to_month(Invoice.at), sum, Invoice.total)
+    count = invoices.aggregate_by(to_month(Invoice.at), len)
+    years = range(min(count).year, max(count).year + 1)
+
+    def cell(month: date) -> str:
+        return f"{money(revenue[month])} ({count[month]})" if month in count else ""
+
+    rows = [[calendar.month_abbr[m], *(cell(date(y, m, 1)) for y in years)] for m in range(1, 13)]
     print_table(["Month", *map(str, years)], rows, "Revenue, with the number of invoices")
 
 
@@ -150,7 +148,7 @@ def daily(db: Db, year: int, month: int) -> None:
     start = datetime(year, month, 1) + DAY_STARTS_AT
     end = _next_month(datetime(year, month, 1)) + DAY_STARTS_AT
     revenue, count = Counter[date](), Counter[date]()
-    # inlay: grouping by day is plain Python over the records the view returns.
+    # inlay: a business day starts at 6:00, which inlay cannot compute, so the invoices are grouped here.
     for invoice in db[Invoice].filter(Invoice.at >= start, Invoice.at < end):
         day = business_day(invoice.at)
         revenue[day] += invoice.total

@@ -199,6 +199,34 @@ with inlay.open("shop.db", [Customer, Order]) as db:
         db[Customer].delete(ana.id)
 ```
 
+### Computed values and reports
+
+Values can be computed, and SQLite does the work, so reports add up many records without loading them.
+With a class `Invoice` that has a `datetime` field `at` and an `int` field `total`:
+
+```python
+from inlay import avg, to_month
+
+invoices = db[Invoice]
+
+# Arithmetic and functions such as `to_month` work wherever a field does: in filters, sorts and aggregates.
+big = invoices.filter(Invoice.total * 0.9 > 100)
+by_month = invoices.sorted(key=(to_month(Invoice.at), Invoice.total))
+latest_month = invoices.max(to_month(Invoice.at))  # a date
+
+# One number per group, as a dict in key order: {date(2026, 1, 1): 152000, date(2026, 2, 1): 148300, ...}
+revenue = invoices.aggregate_by(to_month(Invoice.at), sum, Invoice.total)
+count = invoices.aggregate_by(to_month(Invoice.at), len)
+average = invoices.aggregate_by(to_month(Invoice.at), avg, Invoice.total)
+
+# The same functions work on plain values, so code that loops over records uses them too.
+to_month(datetime(2026, 3, 5, 23, 30))  # date(2026, 3, 1)
+avg([1, 2])                             # 1.5
+```
+
+`aggregate_by` takes the built-ins `len`, `sum`, `min` and `max`, and inlay's `avg` for what Python lacks.
+Groups with no records are left out, as in a `Counter`, and a key can be a tuple of values, as in `sorted`.
+
 A small shop app that uses all of this, with comments that point at each feature, is in [`examples/shop.py`](examples/shop.py).
 [`examples/sales.py`](examples/sales.py) is a command-line tool that imports a bar's SAF-T (PT) sales files and prints monthly, daily and hourly sales reports.
 
@@ -259,9 +287,9 @@ Only the `db` module talks to SQLite.
 |---|---|
 | `meta` | the metadata about each class and its fields |
 | `entity` | the `@entity` decorator, `key` and `Ref` |
-| `nodes` | the condition tree, as plain data |
+| `nodes` | the condition and query trees, as plain data |
 | `conditions` | field references, the builder that turns `Order.total > 100` into the tree |
-| `functions` | functions such as `to_month`, each with its Python and SQL implementation |
+| `functions` | functions such as `to_month` and aggregates such as `avg`, each with its Python and SQL |
 | `types` | Python types to SQLite types, and back |
 | `sql` | pure functions that build one SQL statement or clause each |
 | `db` | `open`, the db, record sets and views, and transactions |
@@ -273,6 +301,7 @@ This is version one, and the limits are on purpose.
 - SQLite only, and one thread.
 - No optional fields, enums or composite keys.
 - No cascading deletes, reverse relations, or migrations.
+- Few functions so far: arithmetic, `to_month` and `to_day`.
 - Slices that skip many records are slow, because SQLite reads and discards the skipped rows.
   Filtering from the last seen value avoids that.
 ## Running it
