@@ -228,6 +228,27 @@ avg([1, 2])                             # 1.5
 `aggregate_by` takes the built-ins `len`, `sum`, `min` and `max`, and inlay's `avg` for what Python lacks.
 Groups with no records are left out, as in a `Counter`, and a key can be a tuple of values, as in `sorted`.
 
+### Your own functions
+
+`to_month` and `avg` are not special: they are a `Function` and an `Aggregate`, and yours work the same way.
+Each one is written twice, in Python for plain values and in SQL for the db, with `{}` where the argument goes:
+
+```python
+from inlay import Aggregate, Function
+
+hour = Function("hour", datetime, int, lambda x: x.hour, "CAST(strftime('%H', {}) AS INTEGER)")
+distinct_count = Aggregate("distinct_count", lambda values: len(set(values)), "COUNT(DISTINCT {})", arg=object, result=int)
+
+late = invoices.filter(hour(Invoice.at) >= 22)
+revenue_per_hour = invoices.aggregate_by(hour(Invoice.at), sum, Invoice.total)
+days_open_per_month = invoices.aggregate_by(to_month(Invoice.at), distinct_count, to_day(Invoice.at))
+hour(datetime(2026, 1, 1, 23))  # 23
+```
+
+The two versions must give the same answers, and nothing checks that they do.
+The SQL sees values as inlay stores them: dates as ISO 8601 text, and aware datetimes in UTC.
+A function takes one argument for now.
+
 A small shop app that uses all of this, with comments that point at each feature, is in [`examples/shop.py`](examples/shop.py).
 
 ## Design
@@ -298,7 +319,8 @@ Only the `db` module talks to SQLite.
 
 This is version one, and the limits are on purpose.
 
-- SQLite only, and one thread.
+- SQLite only
+- One thread.
 - No optional fields, enums or composite keys.
 - No cascading deletes, reverse relations, or migrations.
 - Few functions so far: arithmetic, `to_month` and `to_day`.
