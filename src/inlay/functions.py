@@ -76,6 +76,6 @@ def aggregate_of(func: object) -> Aggregate[Any]:
     """`func` as an `Aggregate`: itself, or the one a built-in such as `sum` stands for."""
     if isinstance(func, Aggregate):
         return func
-    if (aggregate := _BUILTIN_AGGREGATES.get(func)) is None:
-        raise TypeError(f"expected len, sum, min, max or an Aggregate such as avg, got {func!r}")
-    return aggregate
+    if aggregate := _BUILTIN_AGGREGATES.get(func):
+        return aggregate
+    raise TypeError(f"expected len, sum, min, max or an Aggregate such as avg, got {func!r}")
