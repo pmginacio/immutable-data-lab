@@ -226,7 +226,7 @@ A pure function turns it into SQL, and every value goes in as a parameter:
 
 ```python
 Order.customer.city == "Lisbon"
-# "customer_id" IN (SELECT "id" FROM "customer" WHERE "city" = ?)
+# "customer" IN (SELECT "id" FROM "customer" WHERE "city" = ?)
 ```
 
 Relations become subqueries, so there are no joins to write and no duplicate rows.

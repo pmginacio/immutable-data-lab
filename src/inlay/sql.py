@@ -29,18 +29,18 @@ def create_table_sql(m: EntityMeta) -> str:
 
 def create_index_sql(m: EntityMeta, index: tuple[FieldMeta, ...]) -> str:
     name = "__".join((m.table, *(f.name for f in index)))
-    columns = ", ".join(quote(f.column) for f in index)
+    columns = ", ".join(quote(f.name) for f in index)
     return f"CREATE INDEX IF NOT EXISTS {quote(name)} ON {quote(m.table)} ({columns})"
 
 
 def _column_def(f: FieldMeta) -> str:
-    sql = f"{quote(f.column)} {SQL_TYPES[f.py_type]} NOT NULL"
+    sql = f"{quote(f.name)} {SQL_TYPES[f.py_type]} NOT NULL"
     if f.is_key:
         sql += " PRIMARY KEY"
     if f.target is not None:
         target = meta(f.target)
         # Checked at commit, so the order of writes inside a transaction does not matter.
-        sql += f" REFERENCES {quote(target.table)} ({quote(target.key.column)}) DEFERRABLE INITIALLY DEFERRED"
+        sql += f" REFERENCES {quote(target.table)} ({quote(target.key.name)}) DEFERRABLE INITIALLY DEFERRED"
     return sql
 
 
@@ -49,17 +49,17 @@ def insert_sql(m: EntityMeta) -> str:
 
 
 def upsert_sql(m: EntityMeta) -> str:
-    updates = ", ".join(f"{quote(f.column)} = excluded.{quote(f.column)}" for f in m.fields if not f.is_key)
+    updates = ", ".join(f"{quote(f.name)} = excluded.{quote(f.name)}" for f in m.fields if not f.is_key)
     action = f"DO UPDATE SET {updates}" if updates else "DO NOTHING"
-    return f"{insert_sql(m)} ON CONFLICT ({quote(m.key.column)}) {action}"
+    return f"{insert_sql(m)} ON CONFLICT ({quote(m.key.name)}) {action}"
 
 
 def delete_by_key_sql(m: EntityMeta) -> str:
-    return f"DELETE FROM {quote(m.table)} WHERE {quote(m.key.column)} = ?"
+    return f"DELETE FROM {quote(m.table)} WHERE {quote(m.key.name)} = ?"
 
 
 def delete_equal_sql(m: EntityMeta) -> str:
-    return f"DELETE FROM {quote(m.table)} WHERE {' AND '.join(f'{quote(f.column)} = ?' for f in m.fields)}"
+    return f"DELETE FROM {quote(m.table)} WHERE {' AND '.join(f'{quote(f.name)} = ?' for f in m.fields)}"
 
 
 def clear_sql(m: EntityMeta, cond: Condition) -> tuple[str, list[object]]:
@@ -108,7 +108,7 @@ def _join(m: EntityMeta, items: Sequence[Condition], operator: str, empty: str) 
 
 
 def _column(ref: FieldRef) -> str:
-    return quote(steps(ref)[-1].column)
+    return quote(steps(ref)[-1].name)
 
 
 def _on_path(ref: FieldRef, sql: str, params: list[object]) -> tuple[str, list[object]]:
@@ -116,7 +116,7 @@ def _on_path(ref: FieldRef, sql: str, params: list[object]) -> tuple[str, list[o
     for f in reversed(steps(ref)[:-1]):
         assert f.target is not None
         target = meta(f.target)
-        sql = f"{quote(f.column)} IN (SELECT {quote(target.key.column)} FROM {quote(target.table)} WHERE {sql})"
+        sql = f"{quote(f.name)} IN (SELECT {quote(target.key.name)} FROM {quote(target.table)} WHERE {sql})"
     return sql, params
 
 
@@ -179,7 +179,7 @@ def select_sql(m: EntityMeta, query: Query) -> tuple[str, list[object]]:
         columns = [_column(f) + (" DESC" if descending else "") for f, descending in query.order]
         if not any(steps(f) == (m.key,) for f, _ in query.order):
             # The key breaks ties, so slices of the same order never repeat or skip a record.
-            columns.append(quote(m.key.column))
+            columns.append(quote(m.key.name))
         sql += f" ORDER BY {', '.join(columns)}"
     if query.limit is not None or query.offset:
         sql += " LIMIT ? OFFSET ?"
@@ -197,4 +197,4 @@ def aggregate_sql(
 
 
 def _columns(m: EntityMeta) -> str:
-    return ", ".join(quote(f.column) for f in m.fields)
+    return ", ".join(quote(f.name) for f in m.fields)

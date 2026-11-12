@@ -94,9 +94,9 @@ def test_unknown_field_raises():
 def test_meta():
     m = meta(Order)
     id_, customer, total = m.fields
-    assert id_ == FieldMeta(Order, "id", "id", str, is_key=True)
-    assert customer == FieldMeta(Order, "customer", "customer_id", str, ref=Customer)
-    assert total == FieldMeta(Order, "total", "total", int)
+    assert id_ == FieldMeta(Order, "id", str, is_key=True)
+    assert customer == FieldMeta(Order, "customer", str, ref=Customer)
+    assert total == FieldMeta(Order, "total", int)
     assert (m.cls, m.table, m.key, m.indexes) == (Order, "order", id_, ((customer,), (total,)))
     assert customer.target is Customer
     assert meta(OrderLine).table == "lines"
@@ -179,16 +179,6 @@ def test_rejects_ref_without_index():
             id: str = key()
             customer: Ref[Customer]
             total: int
-
-
-def test_rejects_column_clash():
-    with pytest.raises(TypeError, match="column 'customer_id'"):
-
-        @entity(indexes=[("customer",)])
-        class Bad:
-            id: str = key()
-            customer: Ref[Customer]
-            customer_id: str
 
 
 def test_rejects_non_str_key():

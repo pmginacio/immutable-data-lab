@@ -90,10 +90,10 @@ def _field_meta(owner: type, f: Field[Any], hint: Any) -> FieldMeta:
     is_key = bool(f.metadata.get(_KEY))
     if get_origin(hint) is Ref:
         (ref,) = get_args(hint)
-        return FieldMeta(owner, f.name, f"{f.name}_id", str, is_key, ref)
+        return FieldMeta(owner, f.name, str, is_key, ref)
     if hint not in SQL_TYPES:
         raise TypeError(f"{owner.__name__}.{f.name} has unsupported type {hint!r}")
-    return FieldMeta(owner, f.name, f.name, hint, is_key)
+    return FieldMeta(owner, f.name, hint, is_key)
 
 
 def _check(cls_name: str, field_metas: tuple[FieldMeta, ...], indexes: tuple[tuple[str, ...], ...]) -> None:
@@ -105,11 +105,6 @@ def _check(cls_name: str, field_metas: tuple[FieldMeta, ...], indexes: tuple[tup
 
     if clashes := [f.name for f in field_metas if f.name in _FIELD_REF_METHODS]:
         raise TypeError(f"{cls_name} cannot have fields named {', '.join(clashes)}: field references use these names")
-
-    columns = [f.column for f in field_metas]
-    for column in columns:
-        if columns.count(column) > 1:
-            raise TypeError(f"{cls_name} has two fields stored in column {column!r}")
 
     for index in indexes:
         if not index:

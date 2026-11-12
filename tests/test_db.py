@@ -49,11 +49,11 @@ def test_open_creates_tables_and_indexes(tmp_path):
     }
     assert stored["order"] == (
         'CREATE TABLE "order" ("id" TEXT NOT NULL PRIMARY KEY, '
-        '"customer_id" TEXT NOT NULL REFERENCES "customer" ("id") DEFERRABLE INITIALLY DEFERRED, '
+        '"customer" TEXT NOT NULL REFERENCES "customer" ("id") DEFERRABLE INITIALLY DEFERRED, '
         '"total" INTEGER NOT NULL) STRICT'
     )
     assert stored["customer__city__name"] == 'CREATE INDEX "customer__city__name" ON "customer" ("city", "name")'
-    assert stored["order__customer"] == 'CREATE INDEX "order__customer" ON "order" ("customer_id")'
+    assert stored["order__customer"] == 'CREATE INDEX "order__customer" ON "order" ("customer")'
     with closing(sqlite3.connect(path)) as conn:
         assert conn.execute("PRAGMA journal_mode").fetchone() == ("wal",)
 

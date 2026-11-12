@@ -6,7 +6,6 @@ from dataclasses import dataclass
 class FieldMeta:
     owner: type
     name: str
-    column: str
     py_type: type
     is_key: bool = False
     # What a `Ref` field points to, as written; a forward reference until that class exists.
