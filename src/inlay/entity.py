@@ -11,7 +11,7 @@ from inlay.types import SQL_TYPES
 
 _KEY = "inlay_key"
 # Reading `Order.customer.startswith` gives the method, so a field with that name could not be reached.
-_EXPR_METHODS = {name for name in vars(Expr) if not name.startswith("_")}
+_EXPR_METHODS = {name for name in vars(Expr) if not name.startswith("__")}
 
 
 def key() -> Any:

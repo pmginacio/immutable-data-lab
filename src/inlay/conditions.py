@@ -83,7 +83,7 @@ class Expr:
     def __rtruediv__(self, other: object) -> Expr:
         return self.__with(BinOp("/", self.__operand(other), self.__value))
 
-    def apply(self, fn: Function[Any, Any]) -> Expr:
+    def _apply(self, fn: Function[Any, Any]) -> Expr:
         """`fn` applied to this value. Calling `fn` on an `Expr` comes here, through `functions.Applicable`."""
         return self.__with(Call(fn, self.__value))
 

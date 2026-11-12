@@ -8,7 +8,7 @@ from typing import Any, Protocol, cast, runtime_checkable
 class Applicable(Protocol):
     """A value that a `Function` is applied to by building a node, such as the `Expr` of `Order.placed`."""
 
-    def apply(self, fn: Function[Any, Any]) -> Any: ...
+    def _apply(self, fn: Function[Any, Any]) -> Any: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,7 +28,7 @@ class Function[A, R]:
         if isinstance(x, self.arg):
             return self.python(x)
         if isinstance(x, Applicable):
-            return cast(R, x.apply(self))
+            return cast(R, x._apply(self))
         raise TypeError(f"{self.name} needs a {self.arg.__name__}, got {x!r}")
 
 
