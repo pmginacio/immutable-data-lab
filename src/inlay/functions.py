@@ -38,22 +38,19 @@ class Function[A, R]:
 class Aggregate[R]:
     """A function of many values: computed in Python on an iterable, and by SQLite over the records of a view.
 
-    `sql` is the SQL that computes it, with `{}` where the SQL of the value goes; without `{}` it takes no value.
+    `sql` is the SQL that computes it, with `{}` where the SQL of the value goes.
+    `arg` is the type of the values it takes, `object` for any, or None when it takes no value and counts records.
     `result` is the type it gives, or None for the type of the values it takes.
     """
 
     name: str
     python: Callable[[Iterable[Any]], R]
     sql: str
-    arg: type | UnionType = object
+    arg: type | UnionType | None
     result: type | None = None
 
     def __call__(self, values: Iterable[Any]) -> R:
         return self.python(values)
-
-    @property
-    def takes_value(self) -> bool:
-        return "{}" in self.sql
 
 
 # Dates are stored as ISO 8601 text, which is also what SQLite's date functions read and write.
@@ -65,10 +62,10 @@ avg = Aggregate("avg", statistics.fmean, "AVG({})", arg=int | float, result=floa
 
 # The built-ins that can be used as aggregates, so users write `sum` rather than an inlay name.
 _BUILTIN_AGGREGATES: dict[object, Aggregate[Any]] = {
-    len: Aggregate("len", lambda values: sum(1 for _ in values), "COUNT(*)", result=int),
+    len: Aggregate("len", lambda values: sum(1 for _ in values), "COUNT(*)", arg=None, result=int),
     sum: Aggregate("sum", sum, "SUM({})", arg=int | float),
-    min: Aggregate("min", min, "MIN({})"),
-    max: Aggregate("max", max, "MAX({})"),
+    min: Aggregate("min", min, "MIN({})", arg=object),
+    max: Aggregate("max", max, "MAX({})", arg=object),
 }
 
 

@@ -153,10 +153,8 @@ class RecordView[T]:
         `func` is `len`, which takes no `value`, `sum`, `min`, `max`, or an `Aggregate` such as `avg`.
         """
         aggregate = aggregate_of(func)
-        if aggregate.takes_value and value is None:
+        if aggregate.arg is not None and value is None:
             raise TypeError(f"{aggregate.name} needs a value")
-        if not aggregate.takes_value and value is not None:
-            raise TypeError(f"{aggregate.name} takes no value")
         many = isinstance(key, tuple)
         keys = tuple(own_value(self._meta.cls, k) for k in (key if many else (key,)))
         own = None if value is None else self._aggregated(aggregate, value)
@@ -172,6 +170,8 @@ class RecordView[T]:
     def _aggregated(self, aggregate: Aggregate[Any], value: object) -> Value:
         """`value` as a value of the records of this view that `aggregate` can take."""
         own = own_value(self._meta.cls, value)
+        if aggregate.arg is None:
+            raise TypeError(f"{aggregate.name} takes no value")
         if not issubclass(t := result_type(own), aggregate.arg):
             raise TypeError(f"{aggregate.name} cannot take {describe(own)}, a {t.__name__}")
         return own
