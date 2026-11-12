@@ -228,7 +228,6 @@ avg([1, 2])                             # 1.5
 Groups with no records are left out, as in a `Counter`, and a key can be a tuple of values, as in `sorted`.
 
 A small shop app that uses all of this, with comments that point at each feature, is in [`examples/shop.py`](examples/shop.py).
-[`examples/sales.py`](examples/sales.py) is a command-line tool that imports a bar's SAF-T (PT) sales files and prints monthly, daily and hourly sales reports.
 
 ## Design
 
@@ -312,7 +311,6 @@ inlay needs Python 3.15 or later.
 uv run pytest                      # tests
 uv run pyright                     # type checks, including the example
 uv run python examples/shop.py     # the example app
-uv run python examples/sales.py -h # the sales reports
 ```
 
 ## Notes

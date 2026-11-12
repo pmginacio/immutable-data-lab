@@ -16,6 +16,9 @@ wheels/
 session/
 scratchpad/
 
+# Kept locally, out of the repo
+examples/sales.py
+
 # Databases made by running the examples
 *.db
 *.db-wal
