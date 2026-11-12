@@ -1,6 +1,6 @@
 import sqlite3
 from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta, timezone
 
 import pytest
 
@@ -57,6 +57,21 @@ def test_values_round_trip(db):
     e = Everything(i=1, f=1.5, s="x", b=b"\x00", flag=True, at=datetime(2026, 1, 2, 3, 4, tzinfo=UTC), day=date(2026, 1, 2))
     db.add(e)
     assert db[Everything].get(e.id) == e
+
+
+def test_aware_datetimes_compare_by_moment_whatever_their_offset(db):
+    def at(moment: datetime) -> Everything:
+        return Everything(i=1, f=1.0, s="", b=b"", flag=False, at=moment, day=date(2026, 1, 1))
+
+    early = at(datetime(2026, 1, 1, 10, tzinfo=timezone(timedelta(hours=2))))  # 08:00 UTC
+    late = at(datetime(2026, 1, 1, 9, tzinfo=UTC))
+    db.add(early, late)
+    view = db[Everything]
+    assert (view.min(Everything.at), view.max(Everything.at)) == (early.at, late.at)
+    assert [e.id for e in view.sorted(key=Everything.at)] == [early.id, late.id]
+    assert set(view.filter(Everything.at > datetime(2026, 1, 1, 8, 30, tzinfo=UTC))) == {late}
+    assert early in view
+    db.remove(early)
 
 
 def test_add_existing_key_fails_and_writes_nothing(db):
