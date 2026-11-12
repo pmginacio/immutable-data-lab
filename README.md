@@ -300,6 +300,14 @@ References are checked when a call or a transaction ends, so the order of writes
 A reference can never point to nothing: that raises `BrokenRef` and undoes the call.
 Each write call is atomic, and `db.transaction()` groups several, with savepoints when nested.
 
+**Threads and processes.**
+A `Db` is one connection, so give each thread or process its own: call `inlay.open` in each, on the same file.
+Records are plain values and can be passed between threads.
+Readers are never blocked by a writer, and a loop over a view keeps seeing the data as it was when the loop started, even if another connection commits meanwhile.
+Writers take turns.
+A `db.transaction()` holds the write lock until it ends, and another writer waits up to five seconds, then raises `sqlite3.OperationalError: database is locked`.
+The file must be on a local disk, because the db uses SQLite's WAL mode.
+
 **The core is pure.**
 Building conditions, compiling them, and building SQL statements are pure functions.
 Only the `db` module talks to SQLite.
@@ -319,13 +327,15 @@ Only the `db` module talks to SQLite.
 
 This is version one, and the limits are on purpose.
 
-- SQLite only
-- One thread.
+- SQLite only.
+- A `Db` cannot be shared between threads or carried across a `fork`: it raises `ProgrammingError` in another thread.
+- Opening a db waits for any running transaction, and several processes creating the same new file at once can fail with `database is locked`: open it once first.
 - No optional fields, enums or composite keys.
 - No cascading deletes, reverse relations, or migrations.
 - Few functions so far: arithmetic, `to_month` and `to_day`.
 - Slices that skip many records are slow, because SQLite reads and discards the skipped rows.
   Filtering from the last seen value avoids that.
+
 ## Running it
 
 inlay needs Python 3.15 or later.
