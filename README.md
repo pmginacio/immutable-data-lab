@@ -205,7 +205,7 @@ Values can be computed, and the db does the work, so reports add up many records
 With a class `Invoice` that has a `datetime` field `at` and an `int` field `total`:
 
 ```python
-from inlay import avg, to_month
+from inlay import avg, to_day, to_month
 
 invoices = db[Invoice]
 
@@ -214,10 +214,11 @@ big = invoices.filter(Invoice.total * 0.9 > 100)
 by_month = invoices.sorted(key=(to_month(Invoice.at), Invoice.total))
 latest_month = invoices.max(to_month(Invoice.at))  # a date
 
-# One number per group, as a dict in key order: {date(2026, 1, 1): 152000, date(2026, 2, 1): 148300, ...}
-revenue = invoices.aggregate_by(to_month(Invoice.at), sum, Invoice.total)
-count = invoices.aggregate_by(to_month(Invoice.at), len)
-average = invoices.aggregate_by(to_month(Invoice.at), avg, Invoice.total)
+# One number per group, as a dict in key order: {date(2026, 1, 1): 1520.0, date(2026, 2, 1): 1483.0, ...}
+revenue_in_euros = invoices.aggregate_by(to_month(Invoice.at), sum, Invoice.total / 100)
+invoices_per_day = invoices.aggregate_by(to_day(Invoice.at), len)
+# Keyed by the customer's key, for the orders of the example above.
+average_order = db[Order].aggregate_by(Order.customer, avg, Order.total)
 
 # The same functions work on plain values, so code that loops over records uses them too.
 to_month(datetime(2026, 3, 5, 23, 30))  # date(2026, 3, 1)
