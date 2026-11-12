@@ -85,6 +85,7 @@ def test_transforms_compute_in_python_on_values():
 
 @pytest.mark.parametrize("mistake, error", [
     (lambda: to_month(Order.total), "needs a date"),
+    (lambda: to_month(5), "needs a date"),
     (lambda: Order.customer * 2, "needs numbers"),
     (lambda: Order.total + "x", "needs numbers"),
     (lambda: (Order.total * 2).startswith("1"), "expected a field"),

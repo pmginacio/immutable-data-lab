@@ -1,9 +1,9 @@
 from collections.abc import Iterable
-from typing import TYPE_CHECKING
+from typing import Any
 
+from inlay.functions import Function
 from inlay.meta import FieldMeta, meta
 from inlay.nodes import (
-    ArithmeticOp,
     BinOp,
     Call,
     Compare,
@@ -14,12 +14,10 @@ from inlay.nodes import (
     Match,
     Table,
     Value,
+    describe,
     result_type,
     value_fields,
 )
-
-if TYPE_CHECKING:
-    from inlay.functions import Function
 
 
 class Expr:
@@ -40,7 +38,7 @@ class Expr:
     def __getattr__(self, name: str) -> Expr:
         ref = self.__value
         if not isinstance(ref, FieldMeta) or ref.target is None:
-            raise AttributeError(f"{_describe(ref)} is not a Ref, so it has no field {name!r}")
+            raise AttributeError(f"{describe(ref)} is not a Ref, so it has no field {name!r}")
         return Expr((*self.__relations, ref), meta(ref.target).field(name))
 
     def __eq__(self, other: object) -> Condition:  # type: ignore[override]
@@ -62,28 +60,32 @@ class Expr:
         return self.__compare(">=", other)
 
     def __add__(self, other: object) -> Expr:
-        return self.__arithmetic("+", self.__value, self.__operand(other))
+        return self.__with(BinOp("+", self.__value, self.__operand(other)))
 
     def __radd__(self, other: object) -> Expr:
-        return self.__arithmetic("+", self.__operand(other), self.__value)
+        return self.__with(BinOp("+", self.__operand(other), self.__value))
 
     def __sub__(self, other: object) -> Expr:
-        return self.__arithmetic("-", self.__value, self.__operand(other))
+        return self.__with(BinOp("-", self.__value, self.__operand(other)))
 
     def __rsub__(self, other: object) -> Expr:
-        return self.__arithmetic("-", self.__operand(other), self.__value)
+        return self.__with(BinOp("-", self.__operand(other), self.__value))
 
     def __mul__(self, other: object) -> Expr:
-        return self.__arithmetic("*", self.__value, self.__operand(other))
+        return self.__with(BinOp("*", self.__value, self.__operand(other)))
 
     def __rmul__(self, other: object) -> Expr:
-        return self.__arithmetic("*", self.__operand(other), self.__value)
+        return self.__with(BinOp("*", self.__operand(other), self.__value))
 
     def __truediv__(self, other: object) -> Expr:
-        return self.__arithmetic("/", self.__value, self.__operand(other))
+        return self.__with(BinOp("/", self.__value, self.__operand(other)))
 
     def __rtruediv__(self, other: object) -> Expr:
-        return self.__arithmetic("/", self.__operand(other), self.__value)
+        return self.__with(BinOp("/", self.__operand(other), self.__value))
+
+    def apply(self, fn: Function[Any, Any]) -> Expr:
+        """`fn` applied to this value. Calling `fn` on an `Expr` comes here, through `functions.Applicable`."""
+        return self.__with(Call(fn, self.__value))
 
     def startswith(self, prefix: str) -> Condition:
         relations, field = _field_parts(self)
@@ -96,11 +98,10 @@ class Expr:
     def __compare(self, op: CompareOp, other: object) -> Condition:
         return _through(self.__relations, Compare(self.__value, op, self.__operand(other)))
 
-    def __arithmetic(self, op: ArithmeticOp, left: object, right: object) -> Expr:
-        for side in (left, right):
-            if result_type(side) not in (int, float):
-                raise TypeError(f"arithmetic needs numbers, got {_describe(side)}")
-        return Expr(self.__relations, BinOp(op, left, right))
+    def __with(self, value: Value) -> Expr:
+        """`value`, reached through the same relations. Raises if `value` is badly typed."""
+        result_type(value)
+        return Expr(self.__relations, value)
 
     def __operand(self, other: object) -> object:
         """`other` as part of a node with this value: a plain value, or the value of an `Expr` of the same record."""
@@ -123,14 +124,6 @@ def contains(field: str, text: str) -> Condition:
 def one_of[T](field: T, values: Iterable[T]) -> Condition:
     relations, f = _field_parts(field)
     return _through(relations, In(f, tuple(values)))
-
-
-def apply(fn: Function, x: Expr) -> Expr:
-    """`fn` applied to the value of `x`, which must be of the type `fn` takes."""
-    relations, value = _parts(x)
-    if not issubclass(result_type(value), fn.arg):
-        raise TypeError(f"{fn.name} needs a {fn.arg.__name__}, got {_describe(value)}")
-    return Expr(relations, Call(fn, value))
 
 
 def as_own_field(cls: type, value: object) -> FieldMeta:
@@ -166,15 +159,5 @@ def _parts(value: object) -> tuple[tuple[FieldMeta, ...], Value]:
 def _field_parts(value: object) -> tuple[tuple[FieldMeta, ...], FieldMeta]:
     relations, field = _parts(value)
     if not isinstance(field, FieldMeta):
-        raise TypeError(f"expected a field such as Order.total, got {_describe(field)}")
+        raise TypeError(f"expected a field such as Order.total, got {describe(field)}")
     return relations, field
-
-
-def _describe(value: object) -> str:
-    match value:
-        case FieldMeta():
-            return f"{value.owner.__name__}.{value.name}"
-        case Call() | BinOp():
-            return "a computed value"
-        case _:
-            return repr(value)

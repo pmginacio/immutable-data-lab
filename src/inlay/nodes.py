@@ -1,11 +1,9 @@
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
+from inlay.functions import Function
 from inlay.meta import FieldMeta
-
-if TYPE_CHECKING:
-    from inlay.functions import Function
 
 type CompareOp = Literal["==", "!=", "<", "<=", ">", ">="]
 type ArithmeticOp = Literal["+", "-", "*", "/"]
@@ -141,18 +139,39 @@ def classes_read(cond: Condition) -> set[type]:
 
 
 def result_type(value: object) -> type:
-    """The Python type that `value` gives for a record: a `Value`, or a plain value such as `100`."""
+    """The Python type that `value` gives for a record: a `Value`, or a plain value such as `100`.
+
+    Raises if `value` is badly typed, such as a function given the wrong type or arithmetic on text.
+    """
     match value:
         case FieldMeta():
             return value.py_type
-        case Call(fn, _):
+        case Call(fn, arg):
+            if not issubclass(result_type(arg), fn.arg):
+                raise TypeError(f"{fn.name} needs a {fn.arg.__name__}, got {describe(arg)}")
             return fn.result
-        case BinOp("/", _, _):
-            return float
-        case BinOp(_, left, right):
-            return float if float in (result_type(left), result_type(right)) else int
+        case BinOp(op, left, right):
+            types = {_number_type(left), _number_type(right)}
+            return float if op == "/" or float in types else int
         case _:
             return type(value)
+
+
+def _number_type(value: object) -> type:
+    t = result_type(value)
+    if t not in (int, float):
+        raise TypeError(f"arithmetic needs numbers, got {describe(value)}")
+    return t
+
+
+def describe(value: object) -> str:
+    match value:
+        case FieldMeta():
+            return f"{value.owner.__name__}.{value.name}"
+        case Call() | BinOp():
+            return "a computed value"
+        case _:
+            return repr(value)
 
 
 def value_fields(value: object) -> Iterator[FieldMeta]:
