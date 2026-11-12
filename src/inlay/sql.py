@@ -19,6 +19,7 @@ from inlay.nodes import (
     Slice,
     Sort,
     Table,
+    Value,
 )
 from inlay.types import SQL_TYPES, to_sql
 
@@ -161,11 +162,11 @@ def select_sql(query: Query) -> tuple[str, list[object]]:
     return _render(select, _columns(select.m))
 
 
-def aggregate_sql(query: Query, function: Aggregate, field: FieldMeta | None = None) -> tuple[str, list[object]]:
-    """One value computed over the records `query` picks: all of them for COUNT, else `field`, a field of their own."""
+def aggregate_sql(query: Query, function: Aggregate, value: Value | None = None) -> tuple[str, list[object]]:
+    """One value computed over the records `query` picks: all of them for COUNT, else `value`, computed from their own fields."""
     inner, params = select_sql(query)
-    column = "*" if field is None else _column(field)
-    return f"SELECT {function}({column}) FROM ({inner})", params
+    column, value_params = ("*", []) if value is None else value_sql(value)
+    return f"SELECT {function}({column}) FROM ({inner})", value_params + params
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,7 +177,7 @@ class _Select:
     source: str
     source_params: tuple[object, ...] = ()
     where: tuple[Condition, ...] = ()
-    order: tuple[tuple[FieldMeta, bool], ...] = ()  # each field with whether it sorts descending
+    order: tuple[tuple[Value, bool], ...] = ()  # each key with whether it sorts descending
     slice: tuple[int, int | None] | None = None
 
 
@@ -215,8 +216,12 @@ def _render(select: _Select, columns: str) -> tuple[str, list[object]]:
         sql += f" WHERE {where}"
         params += where_params
     if select.order:
-        order = [_column(f) + (" DESC" if descending else "") for f, descending in select.order]
-        if not any(f == select.m.key for f, _ in select.order):
+        order = []
+        for key, descending in select.order:
+            key_sql, key_params = value_sql(key)
+            order.append(key_sql + (" DESC" if descending else ""))
+            params += key_params
+        if not any(key == select.m.key for key, _ in select.order):
             # The key breaks ties, so slices of the same order never repeat or skip a record.
             order.append(quote(select.m.key.name))
         sql += f" ORDER BY {', '.join(order)}"

@@ -126,15 +126,16 @@ def one_of[T](field: T, values: Iterable[T]) -> Condition:
     return _through(relations, In(f, tuple(values)))
 
 
-def as_own_field(cls: type, value: object) -> FieldMeta:
-    """The field `value` stands for, which must be a field of `cls` itself.
+def own_value(cls: type, value: object) -> Value:
+    """The value `value` stands for, which must be computed from fields of `cls` itself.
 
-    `sql.select_sql` and `sql.aggregate_sql` use it as a plain column of the table; a related field would need a join.
+    `sql.select_sql` and `sql.aggregate_sql` compute it from the columns of the table; a related field would need a join.
     """
-    relations, field = _field_parts(value)
-    if relations or field.owner is not cls:
-        raise ValueError(f"{field.owner.__name__}.{field.name} is not a field of {cls.__name__}")
-    return field
+    relations, v = _parts(value)
+    for field in value_fields(v):
+        if relations or field.owner is not cls:
+            raise ValueError(f"{field.owner.__name__}.{field.name} is not a field of {cls.__name__}")
+    return v
 
 
 def _through(relations: tuple[FieldMeta, ...], cond: Condition) -> Condition:

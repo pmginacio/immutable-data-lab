@@ -1,10 +1,10 @@
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 
 import inlay
-from inlay import Ref, entity, key
+from inlay import Ref, entity, key, to_month
 
 
 @entity(indexes=[("city",)])
@@ -94,6 +94,12 @@ def test_sorted_by_several_fields(db):
     assert ids(db[Customer].sorted(key=(Customer.city, Customer.name), reverse=True)) == ["bob", "cid", "ana"]
 
 
+def test_sorted_by_computed_values(db):
+    assert ids(db[Order].sorted(key=200 - Order.total)) == ["o3", "o1", "o4", "o2"]
+    assert ids(db[Order].filter(Order.total > 60).sorted(key=200 - Order.total)) == ["o3", "o1", "o4"]
+    assert ids(db[Order].sorted(key=Order.total)[:3].sorted(key=200 - Order.total)) == ["o1", "o4", "o2"]
+
+
 def test_sorted_needs_fields(db):
     by_customer = sorted(db[Order], key=lambda o: (o.customer, o.id))
     assert list(db[Order].sorted(key=Order.customer)) == by_customer
@@ -171,6 +177,18 @@ def test_min_and_max_of_nothing_need_a_default(db):
         nothing.max(Order.total)
     assert nothing.min(Order.total, default=0) == 0
     assert nothing.max(Order.total, None) is None
+
+
+def test_aggregates_of_computed_values(db):
+    assert db[Order].sum(Order.total * 2) == 1040
+    assert db[Order].filter(Order.total > 60).sum(Order.total - 100) == 170
+    assert db[Order].max(Order.total / 100) == 2.0
+    assert db[Event].max(to_month(Event.at)) == date(2026, 3, 1)
+
+
+def test_sum_needs_numbers(db):
+    with pytest.raises(TypeError, match="sum needs numbers, got Customer.name"):
+        db[Customer].sum(Customer.name)
 
 
 def test_aggregates_need_a_field_of_the_class_itself(db):

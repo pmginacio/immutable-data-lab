@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Final, Literal, Self, overload
 
-from inlay.conditions import as_own_field
-from inlay.meta import EntityMeta, FieldMeta, meta
+from inlay.conditions import own_value
+from inlay.meta import EntityMeta, meta
 from inlay.nodes import (
     Compare,
     Condition,
@@ -17,10 +17,13 @@ from inlay.nodes import (
     Slice,
     Sort,
     Table,
+    Value,
     all_of,
     check_condition,
     classes_read,
+    describe,
     record_class,
+    result_type,
 )
 from inlay.sql import (
     BEGIN,
@@ -114,39 +117,42 @@ class RecordView[T]:
         return self._view(Filter(self._query, cond))
 
     def sorted(self, *, key: Any, reverse: bool = False) -> "RecordView[T]":
-        """`key` is a field, or a tuple of fields."""
-        fields = key if isinstance(key, tuple) else (key,)
-        return self._view(Sort(self._query, tuple(as_own_field(self._meta.cls, f) for f in fields), reverse))
+        """`key` is a value such as `Order.total` or `Order.total * 2`, or a tuple of values."""
+        keys = key if isinstance(key, tuple) else (key,)
+        return self._view(Sort(self._query, tuple(own_value(self._meta.cls, k) for k in keys), reverse))
 
     def get(self, key: str) -> T | None:
         return next(iter(self.filter(Compare(self._meta.key, "==", key))), None)
 
     @overload
-    def sum(self, field: int) -> int: ...
+    def sum(self, value: int) -> int: ...
     @overload
-    def sum(self, field: float) -> float: ...
-    def sum(self, field: Any) -> Any:
-        return self._aggregate("SUM", as_own_field(self._meta.cls, field)) or 0
+    def sum(self, value: float) -> float: ...
+    def sum(self, value: Any) -> Any:
+        own = own_value(self._meta.cls, value)
+        if result_type(own) not in (int, float):
+            raise TypeError(f"sum needs numbers, got {describe(own)}")
+        return self._aggregate("SUM", own) or 0
 
     @overload
-    def min[V](self, field: V) -> V: ...
+    def min[V](self, value: V) -> V: ...
     @overload
-    def min[V, D](self, field: V, default: D) -> V | D: ...
-    def min(self, field: Any, default: Any = _MISSING) -> Any:
-        return self._extreme("MIN", field, default)
+    def min[V, D](self, value: V, default: D) -> V | D: ...
+    def min(self, value: Any, default: Any = _MISSING) -> Any:
+        return self._extreme("MIN", value, default)
 
     @overload
-    def max[V](self, field: V) -> V: ...
+    def max[V](self, value: V) -> V: ...
     @overload
-    def max[V, D](self, field: V, default: D) -> V | D: ...
-    def max(self, field: Any, default: Any = _MISSING) -> Any:
-        return self._extreme("MAX", field, default)
+    def max[V, D](self, value: V, default: D) -> V | D: ...
+    def max(self, value: Any, default: Any = _MISSING) -> Any:
+        return self._extreme("MAX", value, default)
 
-    def _extreme(self, function: Literal["MIN", "MAX"], field: Any, default: object) -> Any:
-        own = as_own_field(self._meta.cls, field)
-        value = self._aggregate(function, own)
-        if value is not None:
-            return from_sql(value, own.py_type)
+    def _extreme(self, function: Literal["MIN", "MAX"], value: Any, default: object) -> Any:
+        own = own_value(self._meta.cls, value)
+        result = self._aggregate(function, own)
+        if result is not None:
+            return from_sql(result, result_type(own))
         if default is _MISSING:
             raise ValueError(f"{function.lower()}() of an empty view")
         return default
@@ -154,8 +160,8 @@ class RecordView[T]:
     def _view(self, query: Query) -> "RecordView[T]":
         return RecordView(self._conn, self._reading, query)
 
-    def _aggregate(self, function: Aggregate, field: FieldMeta | None = None) -> Any:
-        sql, params = aggregate_sql(self._query, function, field)
+    def _aggregate(self, function: Aggregate, value: Value | None = None) -> Any:
+        sql, params = aggregate_sql(self._query, function, value)
         return self._conn.execute(sql, params).fetchone()[0]
 
 

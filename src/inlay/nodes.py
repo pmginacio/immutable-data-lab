@@ -41,7 +41,7 @@ class Sort:
     """`source` sorted by `keys`, like the built-in `sorted`: ties keep the order of `source`."""
 
     source: Query
-    keys: tuple[FieldMeta, ...]
+    keys: tuple[Value, ...]
     reverse: bool
 
 
