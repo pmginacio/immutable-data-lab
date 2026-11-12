@@ -7,7 +7,7 @@ from dataclasses import replace
 from typing import assert_type
 
 from inlay import Db, RecordSet, RecordView, Ref, all_of, any_of, contains, entity, key, negate, none_of, one_of
-from inlay.conditions import And
+from inlay.nodes import And
 
 
 @entity(indexes=[("city",)])

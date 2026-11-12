@@ -5,8 +5,8 @@ from datetime import date, datetime
 import pytest
 
 from inlay import Ref, entity, key
-from inlay.conditions import FieldRef, steps
 from inlay.meta import FieldMeta, meta
+from inlay.nodes import Compare, Filter, In, Table
 
 
 @entity(indexes=[("city", "name")])
@@ -64,22 +64,14 @@ def test_ref_value_on_object_is_the_key():
     assert Order(customer=ana.id, total=1).customer == ana.id
 
 
-def path(ref: FieldRef) -> tuple[str, ...]:
-    return tuple(f"{f.owner.__name__}.{f.name}" for f in steps(ref))
-
-
-def test_class_access_gives_field_refs():
-    assert path(Order.total) == ("Order.total",)
-    assert path(Order.customer) == ("Order.customer",)
-
-
-def test_field_refs_follow_relations():
-    assert path(Order.customer.city) == ("Order.customer", "Customer.city")
-    assert path(OrderLine.order.customer.city) == ("OrderLine.order", "Order.customer", "Customer.city")
+def test_class_access_builds_conditions_on_the_field():
+    assert (Order.total == 1) == Compare(meta(Order).field("total"), "==", 1)
 
 
 def test_self_reference():
-    assert path(Category.parent.parent.name) == ("Category.parent", "Category.parent", "Category.name")
+    parent, name = meta(Category).field("parent"), meta(Category).field("name")
+    grandparent_named = In(parent, Filter(Table(Category), Compare(name, "==", "All")))
+    assert (Category.parent.parent.name == "All") == In(parent, Filter(Table(Category), grandparent_named))
 
 
 def test_unknown_field_raises():

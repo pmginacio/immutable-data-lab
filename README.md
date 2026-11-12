@@ -258,7 +258,8 @@ Only the `db` module talks to SQLite.
 |---|---|
 | `meta` | the metadata about each class and its fields |
 | `entity` | the `@entity` decorator, `key` and `Ref` |
-| `conditions` | field references and the condition tree |
+| `nodes` | the condition tree, as plain data |
+| `conditions` | field references, the builder that turns `Order.total > 100` into the tree |
 | `types` | Python types to SQLite types, and back |
 | `sql` | pure functions that build one SQL statement or clause each |
 | `db` | `open`, the db, record sets and views, and transactions |

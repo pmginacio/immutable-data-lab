@@ -96,27 +96,26 @@ def conn():
     ],
 )
 def test_condition_selects_the_matching_records(conn, cls, cond, expected):
-    m = meta(cls)
-    sql, params = condition_sql(m, cond)
-    rows = conn.execute(f"SELECT id FROM {quote(m.table)} WHERE {sql}", params)
+    sql, params = condition_sql(cond)
+    rows = conn.execute(f"SELECT id FROM {quote(meta(cls).table)} WHERE {sql}", params)
     assert {id_ for (id_,) in rows} == expected
 
 
 def test_values_are_parameters():
-    assert condition_sql(meta(Customer), Customer.name == "a'b") == ('"name" = ?', ["a'b"])
+    assert condition_sql(Customer.name == "a'b") == ('"name" = ?', ["a'b"])
 
 
 def test_datetimes_are_stored_as_text():
-    _, params = condition_sql(meta(Event), Event.at > datetime(2026, 1, 1))
+    _, params = condition_sql(Event.at > datetime(2026, 1, 1))
     assert params == ["2026-01-01T00:00:00"]
 
 
 def test_relations_become_nested_subqueries():
-    assert condition_sql(meta(Order), Order.customer.city == "Lisbon") == (
+    assert condition_sql(Order.customer.city == "Lisbon") == (
         '"customer" IN (SELECT "id" FROM "customer" WHERE "city" = ?)',
         ["Lisbon"],
     )
-    assert condition_sql(meta(OrderLine), OrderLine.order.customer.city == "Lisbon") == (
+    assert condition_sql(OrderLine.order.customer.city == "Lisbon") == (
         '"order" IN (SELECT "id" FROM "order" WHERE "customer" IN (SELECT "id" FROM "customer" WHERE "city" = ?))',
         ["Lisbon"],
     )

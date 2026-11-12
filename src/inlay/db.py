@@ -7,8 +7,9 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Final, Literal, Self, overload
 
-from inlay.conditions import Condition, FieldRef, all_of, as_own_field, check_condition, steps
-from inlay.meta import EntityMeta, meta
+from inlay.conditions import as_own_field
+from inlay.meta import EntityMeta, FieldMeta, meta
+from inlay.nodes import Compare, Condition, all_of, check_condition
 from inlay.sql import (
     BEGIN,
     COMMIT,
@@ -82,7 +83,7 @@ class RecordView[T]:
     def __contains__(self, record: object) -> bool:
         if type(record) is not self._meta.cls:
             return False
-        equal = (FieldRef((f,)) == getattr(record, f.name) for f in self._meta.fields)
+        equal = (Compare(f, "==", getattr(record, f.name)) for f in self._meta.fields)
         return len(self.filter(*equal)) > 0
 
     def __getitem__(self, s: slice) -> "RecordView[T]":
@@ -104,7 +105,7 @@ class RecordView[T]:
         return self._view(self._query.sorted(tuple(as_own_field(self._meta.cls, f) for f in fields), reverse))
 
     def get(self, key: str) -> T | None:
-        return next(iter(self.filter(FieldRef((self._meta.key,)) == key)), None)
+        return next(iter(self.filter(Compare(self._meta.key, "==", key))), None)
 
     @overload
     def sum(self, field: int) -> int: ...
@@ -128,10 +129,10 @@ class RecordView[T]:
         return self._extreme("MAX", field, default)
 
     def _extreme(self, function: Literal["MIN", "MAX"], field: Any, default: object) -> Any:
-        ref = as_own_field(self._meta.cls, field)
-        value = self._aggregate(function, ref)
+        own = as_own_field(self._meta.cls, field)
+        value = self._aggregate(function, own)
         if value is not None:
-            return from_sql(value, steps(ref)[-1].py_type)
+            return from_sql(value, own.py_type)
         if default is _MISSING:
             raise ValueError(f"{function.lower()}() of an empty view")
         return default
@@ -139,7 +140,7 @@ class RecordView[T]:
     def _view(self, query: Query) -> "RecordView[T]":
         return RecordView(self._conn, self._meta, self._reading, query)
 
-    def _aggregate(self, function: Aggregate, field: FieldRef | None = None) -> Any:
+    def _aggregate(self, function: Aggregate, field: FieldMeta | None = None) -> Any:
         sql, params = aggregate_sql(self._meta, self._query, function, field)
         return self._conn.execute(sql, params).fetchone()[0]
 
