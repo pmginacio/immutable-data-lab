@@ -9,7 +9,19 @@ from typing import Any, Final, Literal, Self, overload
 
 from inlay.conditions import as_own_field
 from inlay.meta import EntityMeta, FieldMeta, meta
-from inlay.nodes import Compare, Condition, all_of, check_condition
+from inlay.nodes import (
+    Compare,
+    Condition,
+    Filter,
+    Query,
+    Slice,
+    Sort,
+    Table,
+    all_of,
+    check_condition,
+    classes_read,
+    record_class,
+)
 from inlay.sql import (
     BEGIN,
     COMMIT,
@@ -20,7 +32,6 @@ from inlay.sql import (
     ROLLBACK_TO,
     SAVEPOINT,
     Aggregate,
-    Query,
     aggregate_sql,
     clear_sql,
     create_index_sql,
@@ -62,13 +73,16 @@ class RecordView[T]:
     """A lazy, read-only collection of records. Every read runs its query again."""
 
     _conn: sqlite3.Connection
-    _meta: EntityMeta
     _reading: Counter[type]
-    _query: Query = Query()
+    _query: Query
+
+    @property
+    def _meta(self) -> EntityMeta:
+        return meta(record_class(self._query))
 
     def __iter__(self) -> Iterator[T]:
-        sql, params = select_sql(self._meta, self._query)
-        classes = self._query.reads() | {self._meta.cls}
+        sql, params = select_sql(self._query)
+        classes = classes_read(self._query)
         # SQLite does not say what an open SELECT returns once its tables change, so writes to them are refused.
         self._reading.update(classes)
         try:
@@ -92,17 +106,17 @@ class RecordView[T]:
         start, stop = s.start or 0, s.stop
         if s.step is not None or start < 0 or (stop is not None and stop < 0):
             raise ValueError("a slice takes a start and a stop, and no negative numbers")
-        return self._view(self._query.sliced(start, stop))
+        return self._view(Slice(self._query, start, stop))
 
     def filter(self, *conds: Condition | bool) -> "RecordView[T]":
         cond = all_of(*conds)
         check_condition(self._meta.cls, cond)
-        return self._view(self._query.filter(cond))
+        return self._view(Filter(self._query, cond))
 
     def sorted(self, *, key: Any, reverse: bool = False) -> "RecordView[T]":
         """`key` is a field, or a tuple of fields."""
         fields = key if isinstance(key, tuple) else (key,)
-        return self._view(self._query.sorted(tuple(as_own_field(self._meta.cls, f) for f in fields), reverse))
+        return self._view(Sort(self._query, tuple(as_own_field(self._meta.cls, f) for f in fields), reverse))
 
     def get(self, key: str) -> T | None:
         return next(iter(self.filter(Compare(self._meta.key, "==", key))), None)
@@ -138,10 +152,10 @@ class RecordView[T]:
         return default
 
     def _view(self, query: Query) -> "RecordView[T]":
-        return RecordView(self._conn, self._meta, self._reading, query)
+        return RecordView(self._conn, self._reading, query)
 
     def _aggregate(self, function: Aggregate, field: FieldMeta | None = None) -> Any:
-        sql, params = aggregate_sql(self._meta, self._query, function, field)
+        sql, params = aggregate_sql(self._query, function, field)
         return self._conn.execute(sql, params).fetchone()[0]
 
 
@@ -172,7 +186,7 @@ class Db:
         self._reading: Counter[type] = Counter()
 
     def __getitem__[T](self, cls: type[T]) -> RecordSet[T]:
-        return RecordSet(self._conn, self._meta(cls), self._reading)
+        return RecordSet(self._conn, self._reading, Table(self._meta(cls).cls))
 
     def transaction(self) -> AbstractContextManager[None]:
         return _transaction(self._conn)

@@ -32,8 +32,27 @@ class Table:
 
 @dataclass(frozen=True, slots=True)
 class Filter:
-    source: Table
+    source: Query
     cond: Condition
+
+
+@dataclass(frozen=True, slots=True)
+class Sort:
+    """`source` sorted by `keys`, like the built-in `sorted`: ties keep the order of `source`."""
+
+    source: Query
+    keys: tuple[FieldMeta, ...]
+    reverse: bool
+
+
+@dataclass(frozen=True, slots=True)
+class Slice:
+    source: Query
+    start: int
+    stop: int | None
+
+
+type Query = Table | Filter | Sort | Slice
 
 
 class Condition:
@@ -125,17 +144,31 @@ def check_condition(cls: type, cond: Condition) -> None:
             raise ValueError(f"{field.owner.__name__}.{field.name} cannot be used on {cls.__name__}")
 
 
-def classes_read(cond: Condition) -> set[type]:
-    """The classes whose tables are read to test `cond`: the one it applies to and those it reaches through `In`."""
-    match cond:
-        case In(field, Filter(Table(cls), inner)):
-            return {field.owner, cls} | classes_read(inner)
+def record_class(query: Query) -> type:
+    match query:
+        case Table(cls):
+            return cls
+        case Filter(source) | Sort(source) | Slice(source):
+            return record_class(source)
+
+
+def classes_read(node: Query | Condition) -> set[type]:
+    """The classes whose tables are read to run `node`, including those reached through `In`."""
+    match node:
+        case Table(cls):
+            return {cls}
+        case Filter(source, cond):
+            return classes_read(source) | classes_read(cond)
+        case Sort(source) | Slice(source):
+            return classes_read(source)
+        case In(field, Filter() as records):
+            return {field.owner} | classes_read(records)
         case And(items) | Or(items):
             return set().union(*map(classes_read, items))
         case Not(item):
             return classes_read(item)
         case _:
-            return {f.owner for f in _fields(cond)}
+            return {f.owner for f in _fields(node)}
 
 
 def result_type(value: object) -> type:

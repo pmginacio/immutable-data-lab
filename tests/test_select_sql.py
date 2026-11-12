@@ -2,9 +2,10 @@ import sqlite3
 
 import pytest
 
-from inlay import all_of, entity, key
+from inlay import entity, key
 from inlay.meta import meta
-from inlay.sql import Query, aggregate_sql, create_table_sql, insert_sql, select_sql
+from inlay.nodes import Filter, Slice, Sort, Table
+from inlay.sql import aggregate_sql, create_table_sql, insert_sql, select_sql
 
 
 @entity(indexes=[("city",)])
@@ -16,6 +17,7 @@ class Customer:
 
 
 ID, NAME, CITY, AGE = (meta(Customer).field(name) for name in ("id", "name", "city", "age"))
+CUSTOMERS = Table(Customer)
 
 RECORDS = [
     Customer(id="c1", name="Dora", city="Faro", age=40),
@@ -39,25 +41,25 @@ def conn():
 
 
 def ids(conn, query):
-    sql, params = select_sql(meta(Customer), query)
+    sql, params = select_sql(query)
     return [row[0] for row in conn.execute(sql, params)]
 
 
 def aggregate(conn, query, function, field=None):
-    sql, params = aggregate_sql(meta(Customer), query, function, field)
+    sql, params = aggregate_sql(query, function, field)
     return conn.execute(sql, params).fetchone()[0]
 
 
 def by_name(reverse=False):
-    return Query().sorted((NAME,), reverse)
+    return Sort(CUSTOMERS, (NAME,), reverse)
 
 
 def test_empty_query_selects_everything(conn):
-    assert set(ids(conn, Query())) == {c.id for c in RECORDS}
+    assert set(ids(conn, CUSTOMERS)) == {c.id for c in RECORDS}
 
 
 def test_filters_add_up(conn):
-    query = Query().filter(all_of(Customer.city == "Lisbon")).filter(all_of(Customer.name > "Ana"))
+    query = Filter(Filter(CUSTOMERS, Customer.city == "Lisbon"), Customer.name > "Ana")
     assert set(ids(conn, query)) == {"c3", "c5"}
 
 
@@ -67,21 +69,21 @@ def test_sorted(conn):
 
 
 def test_the_last_sort_is_the_main_one(conn):
-    query = Query().sorted((NAME,), False).sorted((AGE,), False)
+    query = Sort(Sort(CUSTOMERS, (NAME,), False), (AGE,), False)
     assert ids(conn, query) == ["c3", "c2", "c5", "c1", "c4"]
 
 
 def test_a_tuple_of_fields_sorts_by_the_first_then_the_rest(conn):
-    assert ids(conn, Query().sorted((CITY, AGE), False)) == ["c1", "c3", "c2", "c5", "c4"]
+    assert ids(conn, Sort(CUSTOMERS, (CITY, AGE), False)) == ["c1", "c3", "c2", "c5", "c4"]
 
 
 def test_ties_are_broken_by_key_in_both_directions(conn):
-    assert ids(conn, Query().sorted((CITY,), False)) == ["c1", "c2", "c3", "c5", "c4"]
-    assert ids(conn, Query().sorted((CITY,), True)) == ["c4", "c2", "c3", "c5", "c1"]
+    assert ids(conn, Sort(CUSTOMERS, (CITY,), False)) == ["c1", "c2", "c3", "c5", "c4"]
+    assert ids(conn, Sort(CUSTOMERS, (CITY,), True)) == ["c4", "c2", "c3", "c5", "c1"]
 
 
 def test_sorting_by_the_key_needs_no_tiebreaker():
-    sql, _ = select_sql(meta(Customer), Query().sorted((ID,), True))
+    sql, _ = select_sql(Sort(CUSTOMERS, (ID,), True))
     assert sql.endswith('ORDER BY "id" DESC')
 
 
@@ -90,25 +92,25 @@ def test_sorting_by_the_key_needs_no_tiebreaker():
     [(1, 3, ["c3", "c4"]), (3, None, ["c1", "c5"]), (0, 2, ["c2", "c3"]), (2, 2, []), (4, 1, []), (9, None, [])],
 )
 def test_slices(conn, start, stop, expected):
-    assert ids(conn, by_name().sliced(start, stop)) == expected
+    assert ids(conn, Slice(by_name(), start, stop)) == expected
 
 
 def test_slice_of_a_slice(conn):
-    assert ids(conn, by_name().sliced(1, 4).sliced(1, 2)) == ["c4"]
+    assert ids(conn, Slice(Slice(by_name(), 1, 4), 1, 2)) == ["c4"]
 
 
 def test_conditions_after_a_slice_apply_to_the_slice(conn):
-    query = by_name().sliced(0, 3).filter(all_of(Customer.city == "Lisbon"))
+    query = Filter(Slice(by_name(), 0, 3), Customer.city == "Lisbon")
     assert ids(conn, query) == ["c2", "c3"]
 
 
 def test_sort_after_a_slice_reorders_the_slice(conn):
-    query = Query().sorted((ID,), False).sliced(0, 3).sorted((NAME,), True)
+    query = Sort(Slice(Sort(CUSTOMERS, (ID,), False), 0, 3), (NAME,), True)
     assert ids(conn, query) == ["c1", "c3", "c2"]
 
 
 def test_aggregates_cover_the_whole_query(conn):
-    everything = Query()
+    everything = CUSTOMERS
     assert aggregate(conn, everything, "COUNT") == 5
     assert aggregate(conn, everything, "SUM", AGE) == 170
     assert aggregate(conn, everything, "MIN", AGE) == 20
@@ -116,13 +118,13 @@ def test_aggregates_cover_the_whole_query(conn):
 
 
 def test_aggregates_cover_only_the_slice(conn):
-    first_two = by_name().sliced(0, 2)
+    first_two = Slice(by_name(), 0, 2)
     assert aggregate(conn, first_two, "COUNT") == 2
     assert aggregate(conn, first_two, "SUM", AGE) == 50
 
 
 def test_aggregates_of_nothing(conn):
-    nothing = Query().filter(all_of(Customer.city == "Nowhere"))
+    nothing = Filter(CUSTOMERS, Customer.city == "Nowhere")
     assert aggregate(conn, nothing, "COUNT") == 0
     assert aggregate(conn, nothing, "SUM", AGE) is None
     assert aggregate(conn, nothing, "MIN", AGE) is None
