@@ -3,6 +3,7 @@ import sqlite3
 import pytest
 
 from inlay import entity, key
+from inlay.functions import aggregate_of
 from inlay.meta import meta
 from inlay.nodes import Filter, Slice, Sort, Table
 from inlay.sql import aggregate_sql, create_table_sql, insert_sql, select_sql
@@ -46,7 +47,7 @@ def ids(conn, query):
 
 
 def aggregate(conn, query, func, value=None):
-    sql, params = aggregate_sql(query, func, value)
+    sql, params = aggregate_sql(query, aggregate_of(func), value)
     return conn.execute(sql, params).fetchone()[0]
 
 

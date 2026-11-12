@@ -137,8 +137,9 @@ A record is plain, visible data, and the rules that were methods become function
 Code that holds records in memory does not query them.
 It filters, sorts, slices and loops.
 inlay offers those operations on a set of records, so its API can stay close to Python.
-Joins and grouping are done in Python over the records you load, as they would be for a list.
-That keeps the API small, and it means large reports are loaded into memory instead of computed by the database.
+Joins are done in Python over the records you load, as they would be for a list.
+That keeps the API small.
+Reports that add up many records use `aggregate_by`, which SQLite computes without loading them.
 
 ## inlay
 
@@ -236,7 +237,7 @@ Python's `and`, `or`, `not` and `1 < x < 5` would silently drop part of a condit
 **Views are lazy and immutable.**
 `filter`, `sorted` and slicing return a new view, and no SQL runs until it is read.
 Every read runs the query again, so it sees current data, and `tuple(view)` gives a snapshot.
-`len`, `sum`, `min` and `max` run inside SQLite and load no records.
+`len`, `sum`, `min`, `max` and `aggregate_by` run inside SQLite and load no records.
 A slice is a view too, so `view[:10].filter(...)` filters those ten records.
 Changing a table while looping over it is refused, because SQLite does not say what such a loop returns.
 
@@ -271,7 +272,7 @@ This is version one, and the limits are on purpose.
 
 - SQLite only, and one thread.
 - No optional fields, enums or composite keys.
-- No cascading deletes, reverse relations, grouping, or migrations.
+- No cascading deletes, reverse relations, or migrations.
 - Slices that skip many records are slow, because SQLite reads and discards the skipped rows.
   Filtering from the last seen value avoids that.
 ## Running it

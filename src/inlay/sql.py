@@ -1,7 +1,8 @@
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
+from inlay.functions import Aggregate
 from inlay.meta import EntityMeta, FieldMeta, meta
 from inlay.nodes import (
     And,
@@ -31,9 +32,6 @@ SAVEPOINT = "SAVEPOINT inlay"
 RELEASE = "RELEASE inlay"
 ROLLBACK_TO = "ROLLBACK TO inlay"
 LIST_TABLES = "SELECT name, sql FROM sqlite_master WHERE type = 'table'"
-
-# The Python functions that aggregates copy, with the SQL that computes each.
-AGGREGATES: dict[Callable[..., Any], str] = {len: "COUNT", sum: "SUM", min: "MIN", max: "MAX"}
 
 
 def quote(name: str) -> str:
@@ -163,11 +161,23 @@ def select_sql(query: Query) -> tuple[str, list[object]]:
     return _render(select, _columns(select.m))
 
 
-def aggregate_sql(query: Query, func: Callable[..., Any], value: Value | None = None) -> tuple[str, list[object]]:
-    """`func`, one of `AGGREGATES`, over the records `query` picks: of the records for `len`, else of `value`."""
-    inner, params = select_sql(query)
-    column, value_params = ("*", []) if value is None else value_sql(value)
-    return f"SELECT {AGGREGATES[func]}({column}) FROM ({inner})", value_params + params
+def aggregate_sql(
+    query: Query, aggregate: Aggregate[Any], value: Value | None = None, keys: tuple[Value, ...] = ()
+) -> tuple[str, list[object]]:
+    """`aggregate` over the records `query` picks, of `value` if it takes one.
+
+    With `keys`, one row for each distinct key, sorted by key: the values of `keys`, then the aggregate.
+    """
+    inner, inner_params = select_sql(query)
+    parts = [value_sql(k) for k in keys]
+    value_part, value_params = ("", []) if value is None else value_sql(value)
+    columns = [sql for sql, _ in parts] + [aggregate.sql.format(value_part)]
+    sql = f"SELECT {', '.join(columns)} FROM ({inner})"
+    if keys:
+        # Numbers stand for the columns of the result, so each key and its parameters appear only once.
+        positions = ", ".join(str(i) for i in range(1, len(keys) + 1))
+        sql += f" GROUP BY {positions} ORDER BY {positions}"
+    return sql, [p for _, params in parts for p in params] + value_params + inner_params
 
 
 @dataclass(frozen=True, slots=True)

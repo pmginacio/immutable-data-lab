@@ -8,6 +8,7 @@ from types import TracebackType
 from typing import Any, Final, Self, overload
 
 from inlay.conditions import own_value
+from inlay.functions import Aggregate, aggregate_of
 from inlay.meta import EntityMeta, meta
 from inlay.nodes import (
     Compare,
@@ -94,7 +95,7 @@ class RecordView[T]:
             self._reading.subtract(classes)
 
     def __len__(self) -> int:
-        return self._aggregate(len)
+        return self._aggregate(aggregate_of(len))
 
     def __contains__(self, record: object) -> bool:
         if type(record) is not self._meta.cls:
@@ -128,10 +129,8 @@ class RecordView[T]:
     @overload
     def sum(self, value: float) -> float: ...
     def sum(self, value: Any) -> Any:
-        own = own_value(self._meta.cls, value)
-        if result_type(own) not in (int, float):
-            raise TypeError(f"sum needs numbers, got {describe(own)}")
-        return self._aggregate(sum, own) or 0
+        aggregate = aggregate_of(sum)
+        return self._aggregate(aggregate, self._aggregated(aggregate, value)) or 0
 
     @overload
     def min[V](self, value: V) -> V: ...
@@ -147,20 +146,51 @@ class RecordView[T]:
     def max(self, value: Any, default: Any = _MISSING) -> Any:
         return self._extreme(max, value, default)
 
-    def _extreme(self, func: Callable[..., Any], value: Any, default: object) -> Any:
+    def aggregate_by[K, R](self, key: K, func: Callable[..., R], value: Any = None) -> dict[K, R]:
+        """`func` of `value` over the records with each value of `key`, in key order; keys with no records are left out.
+
+        `key` is a value or a tuple of values, as in `sorted`.
+        `func` is `len`, which takes no `value`, `sum`, `min`, `max`, or an `Aggregate` such as `avg`.
+        """
+        aggregate = aggregate_of(func)
+        if aggregate.takes_value and value is None:
+            raise TypeError(f"{aggregate.name} needs a value")
+        if not aggregate.takes_value and value is not None:
+            raise TypeError(f"{aggregate.name} takes no value")
+        many = isinstance(key, tuple)
+        keys = tuple(own_value(self._meta.cls, k) for k in (key if many else (key,)))
+        own = None if value is None else self._aggregated(aggregate, value)
+        sql, params = aggregate_sql(self._query, aggregate, own, keys)
+        rows = self._conn.execute(sql, params).fetchall()
+        key_types = [result_type(k) for k in keys]
+        value_type = aggregate.result or result_type(own)
+        groups: dict[Any, Any] = {
+            tuple(map(from_sql, row[:-1], key_types)): from_sql(row[-1], value_type) for row in rows
+        }
+        return groups if many else {k: v for (k,), v in groups.items()}
+
+    def _aggregated(self, aggregate: Aggregate[Any], value: object) -> Value:
+        """`value` as a value of the records of this view that `aggregate` can take."""
         own = own_value(self._meta.cls, value)
-        result = self._aggregate(func, own)
+        if not issubclass(t := result_type(own), aggregate.arg):
+            raise TypeError(f"{aggregate.name} cannot take {describe(own)}, a {t.__name__}")
+        return own
+
+    def _extreme(self, func: Callable[..., Any], value: Any, default: object) -> Any:
+        aggregate = aggregate_of(func)
+        own = self._aggregated(aggregate, value)
+        result = self._aggregate(aggregate, own)
         if result is not None:
             return from_sql(result, result_type(own))
         if default is _MISSING:
-            raise ValueError(f"{func.__name__}() of an empty view")
+            raise ValueError(f"{aggregate.name}() of an empty view")
         return default
 
     def _view(self, query: Query) -> "RecordView[T]":
         return RecordView(self._conn, self._reading, query)
 
-    def _aggregate(self, func: Callable[..., Any], value: Value | None = None) -> Any:
-        sql, params = aggregate_sql(self._query, func, value)
+    def _aggregate(self, aggregate: Aggregate[Any], value: Value | None = None) -> Any:
+        sql, params = aggregate_sql(self._query, aggregate, value)
         return self._conn.execute(sql, params).fetchone()[0]
 
 

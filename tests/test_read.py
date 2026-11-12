@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime
 import pytest
 
 import inlay
-from inlay import Ref, entity, key, to_month
+from inlay import Ref, avg, entity, key, to_month
 
 
 @entity(indexes=[("city",)])
@@ -187,8 +187,48 @@ def test_aggregates_of_computed_values(db):
 
 
 def test_sum_needs_numbers(db):
-    with pytest.raises(TypeError, match="sum needs numbers, got Customer.name"):
+    with pytest.raises(TypeError, match="sum cannot take Customer.name, a str"):
         db[Customer].sum(Customer.name)
+
+
+def test_aggregate_by(db):
+    orders = db[Order]
+    assert orders.aggregate_by(Order.customer, len) == {"ana": 2, "bob": 1, "cid": 1}
+    assert orders.aggregate_by(Order.customer, sum, Order.total) == {"ana": 200, "bob": 200, "cid": 120}
+    assert orders.aggregate_by(Order.customer, avg, Order.total) == {"ana": 100.0, "bob": 200.0, "cid": 120.0}
+    assert orders.aggregate_by((Order.customer, Order.total), len) == {
+        ("ana", 50): 1, ("ana", 150): 1, ("bob", 200): 1, ("cid", 120): 1
+    }
+
+
+def test_aggregate_by_works_on_views(db):
+    assert db[Order].filter(Order.total > 60).aggregate_by(Order.customer, len) == {"ana": 1, "bob": 1, "cid": 1}
+    assert db[Order].sorted(key=Order.total)[:2].aggregate_by(Order.customer, sum, Order.total) == {"ana": 50, "cid": 120}
+    assert db[Order].filter(Order.total > 999).aggregate_by(Order.customer, len) == {}
+
+
+def test_aggregate_by_computed_values_in_key_order(db):
+    by_rest = db[Order].filter(Order.total > 60).aggregate_by(200 - Order.total, sum, Order.total * 2)
+    assert list(by_rest.items()) == [(0, 400), (50, 300), (80, 240)]
+    assert db[Event].aggregate_by(to_month(Event.at), min, Event.at) == {
+        date(2026, 1, 1): datetime(2026, 1, 1, tzinfo=UTC),
+        date(2026, 3, 1): datetime(2026, 3, 1, tzinfo=UTC),
+    }
+
+
+@pytest.mark.parametrize("mistake, error", [
+    (lambda db: db[Order].aggregate_by(Order.customer, print), "expected len, sum, min, max or an Aggregate"),
+    (lambda db: db[Order].aggregate_by(Order.customer, len, Order.total), "len takes no value"),
+    (lambda db: db[Order].aggregate_by(Order.customer, sum), "sum needs a value"),
+    (lambda db: db[Customer].aggregate_by(Customer.city, avg, Customer.name), "avg cannot take Customer.name, a str"),
+])
+def test_aggregate_by_rejects_wrong_arguments(db, mistake, error):
+    with pytest.raises(TypeError, match=error):
+        mistake(db)
+
+
+def test_aggregates_compute_in_python_too():
+    assert avg([1, 2]) == 1.5
 
 
 def test_aggregates_need_a_field_of_the_class_itself(db):

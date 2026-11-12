@@ -4,9 +4,9 @@ Each `# type: ignore` marks an expected error; pyright reports any that is no lo
 """
 
 from dataclasses import replace
-from typing import assert_type
+from typing import Any, assert_type
 
-from inlay import Db, RecordSet, RecordView, Ref, all_of, any_of, contains, entity, key, negate, none_of, one_of
+from inlay import Db, RecordSet, RecordView, Ref, all_of, any_of, avg, contains, entity, key, negate, none_of, one_of
 from inlay.nodes import And
 
 
@@ -47,6 +47,12 @@ def _tables(db: Db) -> None:
     assert_type(view.min(Order.total), int)
     assert_type(view.max(Order.total, default=None), int | None)
     assert_type(o in view, bool)
+    assert_type(view.aggregate_by(Order.total, len), dict[int, int])
+    assert_type(view.aggregate_by(Order.total, sum, Order.total), dict[int, int])
+    assert_type(view.aggregate_by(Order.total, avg, Order.total), dict[int, float])
+    assert_type(view.aggregate_by((Order.id, Order.total), len), dict[tuple[str, int], int])
+    # pyright cannot pick one of the overloads of the built-in `max`.
+    assert_type(view.aggregate_by(Order.total, max, Order.total), dict[int, Any])
     for order in view:
         assert_type(order, Order)
 
