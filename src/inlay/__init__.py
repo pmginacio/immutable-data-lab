@@ -11,6 +11,7 @@ from inlay.db import (
     open,
 )
 from inlay.entity import Ref, entity, key
+from inlay.functions import Function, to_day, to_month
 from inlay.nodes import Condition, all_of, any_of, negate, none_of
 
 __all__ = [
@@ -18,6 +19,7 @@ __all__ = [
     "BrokenRef",
     "Condition",
     "Db",
+    "Function",
     "Missing",
     "RecordSet",
     "RecordView",
@@ -33,4 +35,6 @@ __all__ = [
     "none_of",
     "one_of",
     "open",
+    "to_day",
+    "to_month",
 ]

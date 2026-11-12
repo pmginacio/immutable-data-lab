@@ -1,11 +1,12 @@
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime
 
 import pytest
 
-from inlay import Ref, all_of, any_of, contains, entity, key, negate, none_of, one_of
+from inlay import Ref, all_of, any_of, contains, entity, key, negate, none_of, one_of, to_day, to_month
 from inlay.meta import meta
 from inlay.sql import condition_sql, create_table_sql, insert_sql, quote
+from inlay.types import to_sql
 
 
 @entity(indexes=[("city",)])
@@ -33,6 +34,7 @@ class OrderLine:
 class Event:
     id: str = key()
     at: datetime
+    on: date
 
 
 RECORDS = [
@@ -46,17 +48,22 @@ RECORDS = [
     OrderLine(id="l1", order="o1"),
     OrderLine(id="l2", order="o3"),
 ]
+EVENTS = [
+    Event(id="e1", at=datetime(2026, 1, 31, 23, 30), on=date(2026, 1, 31)),
+    Event(id="e2", at=datetime(2026, 2, 1, 0, 30), on=date(2026, 2, 1)),
+    Event(id="e3", at=datetime(2026, 2, 15, 12, 0, 0, 123456), on=date(2026, 2, 15)),
+]
 ALL_CUSTOMERS = {"ana", "anabel", "bob", "rita"}
 
 
 @pytest.fixture
 def conn():
     conn = sqlite3.connect(":memory:")
-    for cls in (Customer, Order, OrderLine):
+    for cls in (Customer, Order, OrderLine, Event):
         conn.execute(create_table_sql(meta(cls)))
-    for record in RECORDS:
+    for record in RECORDS + EVENTS:
         m = meta(type(record))
-        conn.execute(insert_sql(m), [getattr(record, f.name) for f in m.fields])
+        conn.execute(insert_sql(m), [to_sql(getattr(record, f.name)) for f in m.fields])
     yield conn
     conn.close()
 
@@ -86,6 +93,10 @@ def conn():
         (Customer, none_of(), ALL_CUSTOMERS),
         (Order, Order.total > Order.discount, {"o1", "o3"}),
         (Order, 100 < Order.total, {"o1"}),
+        (Order, Order.total * 2 > 250, {"o1"}),
+        (Order, Order.total - Order.discount > 50, {"o1", "o3"}),
+        (Order, 200 - Order.total < 100, {"o1"}),
+        (Order, Order.total / 3 > 33.2, {"o1", "o3"}),
         (Order, Order.customer == "bob", {"o3"}),
         (Order, Order.customer.city == "Lisbon", {"o1", "o2"}),
         (Order, negate(Order.customer.city == "Lisbon"), {"o3"}),
@@ -99,6 +110,15 @@ def test_condition_selects_the_matching_records(conn, cls, cond, expected):
     sql, params = condition_sql(cond)
     rows = conn.execute(f"SELECT id FROM {quote(meta(cls).table)} WHERE {sql}", params)
     assert {id_ for (id_,) in rows} == expected
+
+
+@pytest.mark.parametrize("field", ["at", "on"])
+@pytest.mark.parametrize("transform", [to_month, to_day])
+@pytest.mark.parametrize("day", [date(2026, 1, 1), date(2026, 1, 31), date(2026, 2, 1), date(2026, 2, 15)])
+def test_transforms_pick_the_same_records_in_sqlite_and_in_python(conn, field, transform, day):
+    sql, params = condition_sql(transform(getattr(Event, field)) == day)
+    in_sqlite = {id_ for (id_,) in conn.execute(f"SELECT id FROM event WHERE {sql}", params)}
+    assert in_sqlite == {e.id for e in EVENTS if transform(getattr(e, field)) == day}
 
 
 def test_values_are_parameters():

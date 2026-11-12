@@ -260,6 +260,7 @@ Only the `db` module talks to SQLite.
 | `entity` | the `@entity` decorator, `key` and `Ref` |
 | `nodes` | the condition tree, as plain data |
 | `conditions` | field references, the builder that turns `Order.total > 100` into the tree |
+| `functions` | functions such as `to_month`, each with its Python and SQL implementation |
 | `types` | Python types to SQLite types, and back |
 | `sql` | pure functions that build one SQL statement or clause each |
 | `db` | `open`, the db, record sets and views, and transactions |

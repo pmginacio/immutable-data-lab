@@ -1,10 +1,11 @@
 import operator
+from datetime import date, datetime
 
 import pytest
 
-from inlay import Ref, all_of, any_of, contains, entity, key, negate, none_of, one_of
+from inlay import Ref, all_of, any_of, contains, entity, key, negate, none_of, one_of, to_day, to_month
 from inlay.meta import FieldMeta, meta
-from inlay.nodes import And, Compare, Filter, In, Match, Not, Or, Table, check_condition
+from inlay.nodes import And, BinOp, Call, Compare, Filter, In, Match, Not, Or, Table, check_condition
 
 
 @entity(indexes=[("city",)])
@@ -20,6 +21,7 @@ class Order:
     customer: Ref[Customer]
     total: int
     discount: int
+    placed: datetime
 
 
 @entity(indexes=[("order",)])
@@ -38,7 +40,7 @@ def through(cls: type, ref: str, cond) -> In:
     return In(field(cls, ref), Filter(Table(target), cond))
 
 
-TOTAL, DISCOUNT, CUSTOMER = field(Order, "total"), field(Order, "discount"), field(Order, "customer")
+TOTAL, DISCOUNT, CUSTOMER, PLACED = (field(Order, name) for name in ("total", "discount", "customer", "placed"))
 NAME, CITY = field(Customer, "name"), field(Customer, "city")
 
 
@@ -66,9 +68,30 @@ def test_comparisons_build_compare_nodes(fn, op):
     (Order.customer.name.startswith("A"), through(Order, "customer", Match(NAME, "startswith", "A"))),
     (one_of(Customer.city, {"Lisbon"}), In(CITY, ("Lisbon",))),
     (one_of(Order.customer, ["c1", "c2"]), In(CUSTOMER, ("c1", "c2"))),
+    (Order.total * 100 > 5000, Compare(BinOp("*", TOTAL, 100), ">", 5000)),
+    (100 * Order.total > 5000, Compare(BinOp("*", 100, TOTAL), ">", 5000)),
+    (Order.total - Order.discount > 0, Compare(BinOp("-", TOTAL, DISCOUNT), ">", 0)),
+    (to_month(Order.placed) == date(2026, 1, 1), Compare(Call(to_month, PLACED), "==", date(2026, 1, 1))),
+    (to_day(Order.placed) < date(2026, 1, 1), Compare(Call(to_day, PLACED), "<", date(2026, 1, 1))),
 ])
 def test_builder_makes_the_tree(built, tree):
     assert built == tree
+
+
+def test_transforms_compute_in_python_on_values():
+    placed = datetime(2026, 3, 5, 23, 30)
+    assert (to_month(placed), to_day(placed)) == (date(2026, 3, 1), date(2026, 3, 5))
+
+
+@pytest.mark.parametrize("mistake, error", [
+    (lambda: to_month(Order.total), "needs a date"),
+    (lambda: Order.customer * 2, "needs numbers"),
+    (lambda: Order.total + "x", "needs numbers"),
+    (lambda: (Order.total * 2).startswith("1"), "expected a field"),
+])
+def test_values_of_the_wrong_kind_fail_when_built(mistake, error):
+    with pytest.raises(TypeError, match=error):
+        mistake()
 
 
 def test_combining_conditions():
@@ -106,8 +129,9 @@ def test_combinators_reject_a_plain_bool(mistake):
 @pytest.mark.parametrize("mistake", [
     lambda: Order.total > Customer.name,
     lambda: Order.customer.city == Customer.city,
+    lambda: Order.total + Order.customer.name,
 ])
-def test_only_fields_of_the_same_record_compare(mistake):
+def test_only_values_of_the_same_record_combine(mistake):
     with pytest.raises(ValueError, match="same record"):
         mistake()
 

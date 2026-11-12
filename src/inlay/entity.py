@@ -5,13 +5,13 @@ from collections.abc import Callable, Sequence
 from dataclasses import Field, dataclass, field, fields
 from typing import Any, dataclass_transform, get_args, get_origin, overload
 
-from inlay.conditions import FieldRef
+from inlay.conditions import Expr
 from inlay.meta import EntityMeta, FieldMeta
 from inlay.types import SQL_TYPES
 
 _KEY = "inlay_key"
 # Reading `Order.customer.startswith` gives the method, so a field with that name could not be reached.
-_FIELD_REF_METHODS = {name for name in vars(FieldRef) if not name.startswith("_")}
+_EXPR_METHODS = {name for name in vars(Expr) if not name.startswith("_")}
 
 
 def key() -> Any:
@@ -37,7 +37,7 @@ class Ref[T]:
 
 
 class _Field:
-    """Wraps a slot: the value on objects, a `FieldRef` on the class."""
+    """Wraps a slot: the value on objects, an `Expr` for the field on the class."""
 
     def __init__(self, slot: Any, meta: FieldMeta) -> None:
         self._slot = slot
@@ -46,7 +46,7 @@ class _Field:
     def __get__(self, obj: object, owner: type | None = None) -> Any:
         if obj is not None:
             return self._slot.__get__(obj, owner)
-        return FieldRef((self._meta,))
+        return Expr((), self._meta)
 
     def __set__(self, obj: object, value: object) -> None:
         self._slot.__set__(obj, value)
@@ -103,7 +103,7 @@ def _check(cls_name: str, field_metas: tuple[FieldMeta, ...], indexes: tuple[tup
     if keys[0].py_type is not str or keys[0].ref is not None:
         raise TypeError(f"{cls_name}.{keys[0].name} is the key and must be a str")
 
-    if clashes := [f.name for f in field_metas if f.name in _FIELD_REF_METHODS]:
+    if clashes := [f.name for f in field_metas if f.name in _EXPR_METHODS]:
         raise TypeError(f"{cls_name} cannot have fields named {', '.join(clashes)}: field references use these names")
 
     for index in indexes:

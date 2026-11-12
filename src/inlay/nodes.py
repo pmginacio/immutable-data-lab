@@ -1,10 +1,30 @@
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from inlay.meta import FieldMeta
 
+if TYPE_CHECKING:
+    from inlay.functions import Function
+
 type CompareOp = Literal["==", "!=", "<", "<=", ">", ">="]
+type ArithmeticOp = Literal["+", "-", "*", "/"]
+
+
+@dataclass(frozen=True, slots=True)
+class Call:
+    fn: Function[Any, Any]
+    arg: Value
+
+
+@dataclass(frozen=True, slots=True)
+class BinOp:
+    op: ArithmeticOp
+    left: object  # a `Value`, or a number
+    right: object
+
+
+type Value = FieldMeta | Call | BinOp
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,9 +62,9 @@ class Condition:
 
 @dataclass(frozen=True, slots=True)
 class Compare(Condition):
-    left: FieldMeta
+    left: Value
     op: CompareOp
-    right: object  # a value, or another field of the same record
+    right: object  # a plain value, or a `Value` of the same record
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,12 +140,40 @@ def classes_read(cond: Condition) -> set[type]:
             return {f.owner for f in _fields(cond)}
 
 
+def result_type(value: object) -> type:
+    """The Python type that `value` gives for a record: a `Value`, or a plain value such as `100`."""
+    match value:
+        case FieldMeta():
+            return value.py_type
+        case Call(fn, _):
+            return fn.result
+        case BinOp("/", _, _):
+            return float
+        case BinOp(_, left, right):
+            return float if float in (result_type(left), result_type(right)) else int
+        case _:
+            return type(value)
+
+
+def value_fields(value: object) -> Iterator[FieldMeta]:
+    """The fields that `value` reads; none for a plain value."""
+    match value:
+        case FieldMeta():
+            yield value
+        case Call(_, arg):
+            yield from value_fields(arg)
+        case BinOp(_, left, right):
+            yield from value_fields(left)
+            yield from value_fields(right)
+
+
 def _fields(cond: Condition) -> Iterator[FieldMeta]:
     """The fields of the tested record that `cond` uses, not those of the records it reaches through `In`."""
     match cond:
-        case Compare(left, _, FieldMeta() as right):
-            yield from (left, right)
-        case Compare(field, _, _) | Match(field, _, _) | In(field, _):
+        case Compare(left, _, right):
+            yield from value_fields(left)
+            yield from value_fields(right)
+        case Match(field, _, _) | In(field, _):
             yield field
         case And(items) | Or(items):
             for item in items:

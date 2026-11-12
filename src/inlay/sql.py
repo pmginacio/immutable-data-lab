@@ -3,7 +3,7 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 from inlay.meta import EntityMeta, FieldMeta, meta
-from inlay.nodes import And, Compare, CompareOp, Condition, Filter, In, Match, Not, Or, classes_read
+from inlay.nodes import And, BinOp, Call, Compare, CompareOp, Condition, Filter, In, Match, Not, Or, classes_read
 from inlay.types import SQL_TYPES, to_sql
 
 CONNECTION_SETUP = ("PRAGMA foreign_keys = ON", "PRAGMA journal_mode = WAL")
@@ -75,10 +75,10 @@ def _sql_op(op: CompareOp) -> str:
 def condition_sql(cond: Condition) -> tuple[str, list[object]]:
     """The SQL for `cond`, and its parameters in order. `cond` was checked by `check_condition`."""
     match cond:
-        case Compare(left, op, FieldMeta() as right):
-            return f"{_column(left)} {_sql_op(op)} {_column(right)}", []
-        case Compare(left, op, value):
-            return f"{_column(left)} {_sql_op(op)} ?", [to_sql(value)]
+        case Compare(left, op, right):
+            left_sql, left_params = value_sql(left)
+            right_sql, right_params = value_sql(right)
+            return f"{left_sql} {_sql_op(op)} {right_sql}", left_params + right_params
         case Match(field, "startswith", text):
             return f"substr({_column(field)}, 1, ?) = ?", [len(text), text]
         case Match(field, "endswith", text):
@@ -115,6 +115,25 @@ def _keys_sql(records: Filter) -> tuple[str, list[object]]:
     m = meta(records.source.cls)
     where, params = condition_sql(records.cond)
     return f"SELECT {quote(m.key.name)} FROM {quote(m.table)} WHERE {where}", params
+
+
+def value_sql(value: object) -> tuple[str, list[object]]:
+    """The SQL for a `Value`, or a parameter for a plain value, and its parameters in order."""
+    match value:
+        case FieldMeta():
+            return _column(value), []
+        case Call(fn, arg):
+            sql, params = value_sql(arg)
+            return fn.sql.format(sql), params
+        case BinOp(op, left, right):
+            left_sql, left_params = value_sql(left)
+            right_sql, right_params = value_sql(right)
+            if op == "/":
+                # SQLite divides two integers without a remainder; Python's `/` does not.
+                left_sql = f"CAST({left_sql} AS REAL)"
+            return f"({left_sql} {op} {right_sql})", left_params + right_params
+        case _:
+            return "?", [to_sql(value)]
 
 
 def _column(field: FieldMeta) -> str:
