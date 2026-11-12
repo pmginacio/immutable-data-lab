@@ -139,7 +139,7 @@ It filters, sorts, slices and loops.
 inlay offers those operations on a set of records, so its API can stay close to Python.
 Joins are done in Python over the records you load, as they would be for a list.
 That keeps the API small.
-Reports that add up many records use `aggregate_by`, which SQLite computes without loading them.
+Reports that add up many records use `aggregate_by`, which the db computes without loading them.
 
 ## inlay
 
@@ -201,7 +201,7 @@ with inlay.open("shop.db", [Customer, Order]) as db:
 
 ### Computed values and reports
 
-Values can be computed, and SQLite does the work, so reports add up many records without loading them.
+Values can be computed, and the db does the work, so reports add up many records without loading them.
 With a class `Invoice` that has a `datetime` field `at` and an `int` field `total`:
 
 ```python
@@ -241,7 +241,7 @@ Nothing changes behind the back of the code that holds a record.
 **The db is a set of records per class.**
 The method names come from Python's own types: `add`, `update`, `remove`, `discard`, `clear`, `in`, `len`, `sorted`, slicing, `sum`, `min` and `max`.
 Reads return whole records, never single fields.
-Database calls are always visible: only `db`, and the sets and views it hands out, touch SQLite.
+Database calls are always visible: only `db`, and the sets and views it hands out, touch the database.
 
 **Relations are keys.**
 `customer: Ref[Customer]` is stored as the customer's key.
@@ -265,7 +265,7 @@ Python's `and`, `or`, `not` and `1 < x < 5` would silently drop part of a condit
 **Views are lazy and immutable.**
 `filter`, `sorted` and slicing return a new view, and no SQL runs until it is read.
 Every read runs the query again, so it sees current data, and `tuple(view)` gives a snapshot.
-`len`, `sum`, `min`, `max` and `aggregate_by` run inside SQLite and load no records.
+`len`, `sum`, `min`, `max` and `aggregate_by` run inside the db and load no records.
 A slice is a view too, so `view[:10].filter(...)` filters those ten records.
 Changing a table while looping over it is refused, because SQLite does not say what such a loop returns.
 

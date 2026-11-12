@@ -184,7 +184,7 @@ def orders_in_city(orders: RecordView[Order], city: str) -> RecordView[Order]:
 
 
 def latest_orders(db: Db, customer_id: str, page: int = 0, size: int = 5) -> RecordView[Order]:
-    # `sorted` and slicing work like the built-ins, and the sorting and the slicing both happen in SQLite.
+    # `sorted` and slicing work like the built-ins, and the sorting and the slicing both happen in the db.
     newest_first = db[Order].filter(Order.customer == customer_id).sorted(key=Order.placed, reverse=True)
     return newest_first[page * size : (page + 1) * size]
 
@@ -264,7 +264,7 @@ def main() -> None:
                 print(f"  {customer.name:<4} {money(total):>8}")
 
             lisbon = orders_in_city(paid_orders(db), "Lisbon")
-            # inlay: `len` and `sum` run inside SQLite and return one number. No record is loaded.
+            # inlay: `len` and `sum` run inside the db and return one number. No record is loaded.
             print(f"\nLisbon: {len(lisbon)} paid orders, {money(lisbon.sum(Order.total))}")
 
             print("\nAna's latest orders")

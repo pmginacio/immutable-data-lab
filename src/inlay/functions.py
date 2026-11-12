@@ -15,7 +15,7 @@ class Applicable(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class Function[A, R]:
-    """A function of one value: computed in Python on a plain value, and by SQLite on a field in a condition.
+    """A function of one value: computed in Python on a plain value, and by the db on a field in a condition.
 
     `sql` is the SQL that computes it, with `{}` where the SQL of the argument goes.
     """
@@ -36,7 +36,7 @@ class Function[A, R]:
 
 @dataclass(frozen=True, slots=True)
 class Aggregate[R]:
-    """A function of many values: computed in Python on an iterable, and by SQLite over the records of a view.
+    """A function of many values: computed in Python on an iterable, and by the db over the records of a view.
 
     `sql` is the SQL that computes it, with `{}` where the SQL of the value goes.
     `arg` is the type of the values it takes, `object` for any, or None when it takes no value and counts records.

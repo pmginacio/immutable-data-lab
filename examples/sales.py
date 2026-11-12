@@ -124,7 +124,7 @@ def import_files(db: Db, paths: Sequence[Path]) -> None:
 # ---------------------------------------------------------------------------
 # The reports
 #
-# inlay: `aggregate_by` asks SQLite for one number per group, such as the revenue of each month.
+# inlay: `aggregate_by` asks the db for one number per group, such as the revenue of each month.
 # Groups that inlay cannot compute, such as a business day that starts at 6:00, are built in Python
 # from the records a view returns.
 # ---------------------------------------------------------------------------
