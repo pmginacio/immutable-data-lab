@@ -1,6 +1,6 @@
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Any
 
 from inlay.meta import EntityMeta, FieldMeta, meta
 from inlay.nodes import (
@@ -32,7 +32,8 @@ RELEASE = "RELEASE inlay"
 ROLLBACK_TO = "ROLLBACK TO inlay"
 LIST_TABLES = "SELECT name, sql FROM sqlite_master WHERE type = 'table'"
 
-type Aggregate = Literal["COUNT", "SUM", "MIN", "MAX"]
+# The Python functions that aggregates copy, with the SQL that computes each.
+AGGREGATES: dict[Callable[..., Any], str] = {len: "COUNT", sum: "SUM", min: "MIN", max: "MAX"}
 
 
 def quote(name: str) -> str:
@@ -162,11 +163,11 @@ def select_sql(query: Query) -> tuple[str, list[object]]:
     return _render(select, _columns(select.m))
 
 
-def aggregate_sql(query: Query, function: Aggregate, value: Value | None = None) -> tuple[str, list[object]]:
-    """One value computed over the records `query` picks: all of them for COUNT, else `value`, computed from their own fields."""
+def aggregate_sql(query: Query, func: Callable[..., Any], value: Value | None = None) -> tuple[str, list[object]]:
+    """`func`, one of `AGGREGATES`, over the records `query` picks: of the records for `len`, else of `value`."""
     inner, params = select_sql(query)
     column, value_params = ("*", []) if value is None else value_sql(value)
-    return f"SELECT {function}({column}) FROM ({inner})", value_params + params
+    return f"SELECT {AGGREGATES[func]}({column}) FROM ({inner})", value_params + params
 
 
 @dataclass(frozen=True, slots=True)

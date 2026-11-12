@@ -5,7 +5,7 @@ from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, S
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Any, Final, Literal, Self, overload
+from typing import Any, Final, Self, overload
 
 from inlay.conditions import own_value
 from inlay.meta import EntityMeta, meta
@@ -34,7 +34,6 @@ from inlay.sql import (
     ROLLBACK,
     ROLLBACK_TO,
     SAVEPOINT,
-    Aggregate,
     aggregate_sql,
     clear_sql,
     create_index_sql,
@@ -95,7 +94,7 @@ class RecordView[T]:
             self._reading.subtract(classes)
 
     def __len__(self) -> int:
-        return self._aggregate("COUNT")
+        return self._aggregate(len)
 
     def __contains__(self, record: object) -> bool:
         if type(record) is not self._meta.cls:
@@ -132,36 +131,36 @@ class RecordView[T]:
         own = own_value(self._meta.cls, value)
         if result_type(own) not in (int, float):
             raise TypeError(f"sum needs numbers, got {describe(own)}")
-        return self._aggregate("SUM", own) or 0
+        return self._aggregate(sum, own) or 0
 
     @overload
     def min[V](self, value: V) -> V: ...
     @overload
     def min[V, D](self, value: V, default: D) -> V | D: ...
     def min(self, value: Any, default: Any = _MISSING) -> Any:
-        return self._extreme("MIN", value, default)
+        return self._extreme(min, value, default)
 
     @overload
     def max[V](self, value: V) -> V: ...
     @overload
     def max[V, D](self, value: V, default: D) -> V | D: ...
     def max(self, value: Any, default: Any = _MISSING) -> Any:
-        return self._extreme("MAX", value, default)
+        return self._extreme(max, value, default)
 
-    def _extreme(self, function: Literal["MIN", "MAX"], value: Any, default: object) -> Any:
+    def _extreme(self, func: Callable[..., Any], value: Any, default: object) -> Any:
         own = own_value(self._meta.cls, value)
-        result = self._aggregate(function, own)
+        result = self._aggregate(func, own)
         if result is not None:
             return from_sql(result, result_type(own))
         if default is _MISSING:
-            raise ValueError(f"{function.lower()}() of an empty view")
+            raise ValueError(f"{func.__name__}() of an empty view")
         return default
 
     def _view(self, query: Query) -> "RecordView[T]":
         return RecordView(self._conn, self._reading, query)
 
-    def _aggregate(self, function: Aggregate, value: Value | None = None) -> Any:
-        sql, params = aggregate_sql(self._query, function, value)
+    def _aggregate(self, func: Callable[..., Any], value: Value | None = None) -> Any:
+        sql, params = aggregate_sql(self._query, func, value)
         return self._conn.execute(sql, params).fetchone()[0]
 
 

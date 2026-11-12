@@ -45,8 +45,8 @@ def ids(conn, query):
     return [row[0] for row in conn.execute(sql, params)]
 
 
-def aggregate(conn, query, function, field=None):
-    sql, params = aggregate_sql(query, function, field)
+def aggregate(conn, query, func, value=None):
+    sql, params = aggregate_sql(query, func, value)
     return conn.execute(sql, params).fetchone()[0]
 
 
@@ -111,20 +111,20 @@ def test_sort_after_a_slice_reorders_the_slice(conn):
 
 def test_aggregates_cover_the_whole_query(conn):
     everything = CUSTOMERS
-    assert aggregate(conn, everything, "COUNT") == 5
-    assert aggregate(conn, everything, "SUM", AGE) == 170
-    assert aggregate(conn, everything, "MIN", AGE) == 20
-    assert aggregate(conn, everything, "MAX", NAME) == "Eva"
+    assert aggregate(conn, everything, len) == 5
+    assert aggregate(conn, everything, sum, AGE) == 170
+    assert aggregate(conn, everything, min, AGE) == 20
+    assert aggregate(conn, everything, max, NAME) == "Eva"
 
 
 def test_aggregates_cover_only_the_slice(conn):
     first_two = Slice(by_name(), 0, 2)
-    assert aggregate(conn, first_two, "COUNT") == 2
-    assert aggregate(conn, first_two, "SUM", AGE) == 50
+    assert aggregate(conn, first_two, len) == 2
+    assert aggregate(conn, first_two, sum, AGE) == 50
 
 
 def test_aggregates_of_nothing(conn):
     nothing = Filter(CUSTOMERS, Customer.city == "Nowhere")
-    assert aggregate(conn, nothing, "COUNT") == 0
-    assert aggregate(conn, nothing, "SUM", AGE) is None
-    assert aggregate(conn, nothing, "MIN", AGE) is None
+    assert aggregate(conn, nothing, len) == 0
+    assert aggregate(conn, nothing, sum, AGE) is None
+    assert aggregate(conn, nothing, min, AGE) is None
