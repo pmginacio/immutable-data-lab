@@ -250,7 +250,11 @@ class Db:
 
     def update(self, *objs: object) -> None:
         """Adds each record, or replaces the one with the same key, which stays in the history."""
-        self._write(objs, _update)
+        # The last record with each key wins, as if they were written one by one.
+        latest = list({(type(o), getattr(o, meta(type(o)).key.name)): o for o in objs}.values())
+        with self.transaction():
+            self._write(latest, _delete_by_key)
+            self._write(latest, _insert)
 
     def remove(self, *objs: object) -> None:
         self._write(objs, _remove)
@@ -286,11 +290,9 @@ def _insert(conn: sqlite3.Connection, m: EntityMeta, group: list[object]) -> Non
     conn.executemany(insert_sql(m), _rows(m, group))
 
 
-def _update(conn: sqlite3.Connection, m: EntityMeta, group: list[object]) -> None:
-    # The last record with each key wins, as if they were written one by one.
-    latest = {getattr(o, m.key.name): o for o in group}
-    conn.executemany(delete_by_key_sql(m), ((to_sql(k),) for k in latest))
-    _insert(conn, m, list(latest.values()))
+def _delete_by_key(conn: sqlite3.Connection, m: EntityMeta, group: list[object]) -> None:
+    """Ends the current versions with the keys of `group`, if there are any."""
+    conn.executemany(delete_by_key_sql(m), ((to_sql(getattr(o, m.key.name)),) for o in group))
 
 
 def _remove(conn: sqlite3.Connection, m: EntityMeta, group: list[object]) -> None:
