@@ -249,7 +249,7 @@ class Db:
         self._write(insert_sql, objs)
 
     def update(self, *objs: object) -> None:
-        """Ends the current version with each record's key, if there is one, and adds the record as the new one."""
+        """Adds each record, or replaces the one with the same key, which stays in the history."""
         groups = self._grouped(objs)
         _check_idle(self._reading, [m.cls for m, _ in groups])
         with _transaction(self._conn):
