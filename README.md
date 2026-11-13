@@ -255,11 +255,28 @@ A small shop app that uses all of this, with comments that point at each feature
 
 There are no migration files.
 A migration is a Python function that takes the db, and `migrate` runs it in one transaction: either all of it happens or none of it does.
-It changes the schema of one class, and you keep the old shape in the code as a class of its own while the migration exists:
+It changes the schema of one class.
+Here is the code before a change, while the migration exists, and after it.
+
+Before: `Order` has no `discount` yet.
 
 ```python
 @entity(indexes=[("customer",)])
-class OrderLegacy:             # the old shape, stored in the table "order"
+class Order:
+    id: str = key()
+    customer: Ref[Customer]
+    total: int
+
+with inlay.open("shop.db", [Customer, Order]) as db:    # the table "order" has the columns id, customer, total
+    ...
+```
+
+While: the old class stays in the code under another name, because it describes the table as it is stored.
+`Order` gets the new field, and the migration copies each old record into a new one.
+
+```python
+@entity(indexes=[("customer",)])
+class OrderLegacy:             # the old class, renamed
     id: str = key()
     customer: Ref[Customer]
     total: int
@@ -274,7 +291,24 @@ class Order:                   # the new shape
 def add_discount(db: Db) -> None:
     db.add(*(Order(id=o.id, customer=o.customer, total=o.total, discount=0) for o in db[OrderLegacy]))
 
-inlay.migrate("shop.db", add_discount, OrderLegacy, Order)
+inlay.migrate("shop.db", add_discount, OrderLegacy, Order)    # migrates a db file once, and does nothing after that
+
+with inlay.open("shop.db", [Customer, Order]) as db:
+    ...
+```
+
+After: once every db file has been migrated, `OrderLegacy`, `add_discount` and the `migrate` call are deleted.
+
+```python
+@entity(indexes=[("customer",)])
+class Order:
+    id: str = key()
+    customer: Ref[Customer]
+    total: int
+    discount: int
+
+with inlay.open("shop.db", [Customer, Order]) as db:    # the table "order" has the columns id, customer, total, discount
+    ...
 ```
 
 `migrate` sees that the table `order` still holds the old shape, moves it aside, creates the new table, and runs the function, which can read and write any records.
