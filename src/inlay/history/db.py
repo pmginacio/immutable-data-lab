@@ -252,9 +252,7 @@ class Db:
         """Adds each record, or replaces the one with the same key, which stays in the history."""
         # The last record with each key wins, as if they were written one by one.
         latest = list({(type(o), getattr(o, meta(type(o)).key.name)): o for o in objs}.values())
-        with self.transaction():
-            self._apply_by_entity(latest, _delete_by_key)
-            self._apply_by_entity(latest, _insert)
+        self._apply_by_entity(latest, _delete_by_key, _insert)
 
     def remove(self, *objs: object) -> None:
         self._apply_by_entity(objs, _remove)
@@ -273,13 +271,15 @@ class Db:
     ) -> None:
         self.close()
 
-    def _apply_by_entity(self, objs: Sequence[object], write: _Write) -> None:
-        """Runs `write` on the records of each class, all in one transaction."""
+    def _apply_by_entity(self, objs: Sequence[object], *writes: _Write) -> None:
+        """Runs `writes`, in order, on the records of each class, all in one transaction."""
         groups = _grouped(objs)
         _check_idle(self._reading, groups)
         with _transaction(self._conn):
             for cls, group in groups.items():
-                write(self._conn, _meta_in(self._metas, cls), group)
+                m = _meta_in(self._metas, cls)
+                for write in writes:
+                    write(self._conn, m, group)
 
 
 # Writes the records of one class. It runs inside the transaction, so raising undoes the whole call.
