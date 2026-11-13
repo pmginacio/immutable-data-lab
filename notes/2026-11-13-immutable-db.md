@@ -48,7 +48,7 @@ The only change to an existing row is `tx_to`, once, from current to a transacti
 
 The primary key is SQLite's row id, not `(id, tx_from)`.
 Two writes to the same record in one transaction then need no special case: the version made first in the transaction is closed in the same transaction, its range is empty, and no read ever sees it.
-An ordinary index on `(id, tx_from)` serves the versions of one record.
+An ordinary index on `(id, tx_to)` serves the versions of one record.
 
 ### Integrity
 
@@ -144,7 +144,9 @@ Most reads are of the latest data, which is an exact match on `tx_to`, so `tx_to
 - `(tx_to, tx_from)` serves reading a whole class, now or at T.
 - `(live_<ref>)` for each `Ref`: SQLite needs an index that starts with the child column of a foreign key, or removing a record scans the referring table.
   Today the declared index of a `Ref` does both jobs; here the declared index serves reads and this one serves the foreign key.
-- `(id, tx_from)` serves the versions of one record.
+- `(id, tx_to)` serves one record: its current version is an exact match on both columns, and a version at T is a range on `tx_to`.
+  With `tx_from` second, as first built, a current version matched only on the key, and SQLite chose `(tx_to, tx_from)` instead, walking every current row to find one key.
+  That made `update` of n records take time in proportion to n squared.
 
 Reads at a past T have two ranges, and an index seeks on one, so they are served less well.
 Whether this is good enough is for the benchmark to say.

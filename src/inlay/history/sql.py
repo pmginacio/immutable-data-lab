@@ -80,23 +80,28 @@ def create_table_sql(m: EntityMeta) -> str:
 
 def create_index_sql(m: EntityMeta, index: tuple[FieldMeta, ...]) -> str:
     """A declared index, after `tx_to`, so that reading the current versions is an exact match on its first column."""
-    name = "__".join((m.table, *(f.name for f in index)))
-    columns = ", ".join(map(_column, index))
-    return f"CREATE INDEX IF NOT EXISTS {quote(name)} ON {quote(m.table)} ({quote(_TX_TO)}, {columns})"
+    return _index_sql(m, [f.name for f in index], [quote(_TX_TO), *map(_column, index)])
 
 
 def version_index_sqls(m: EntityMeta) -> list[str]:
-    """The indexes every class needs: to read all of it, to read the versions of a record, and to check references.
+    """The indexes every class needs: to read all of it, to read one record, and to check references.
 
+    The key comes before `tx_to`, so finding a current version by key matches both columns,
+    and SQLite chooses this index over `(tx_to, tx_from)` without needing statistics.
     SQLite needs an index that starts with the column of a foreign key, or a removal scans the referring table.
     """
-    table = quote(m.table)
-    columns = [(_TX_TO, _TX_FROM), (m.key.name, _TX_FROM)]
-    columns += [(_live(f),) for f in m.fields if f.target is not None]
-    return [
-        f"CREATE INDEX IF NOT EXISTS {quote('__'.join((m.table, *c)))} ON {table} ({', '.join(map(quote, c))})"
-        for c in columns
+    indexes = [
+        ([_TX_TO, _TX_FROM], [quote(_TX_TO), quote(_TX_FROM)]),
+        ([m.key.name, _TX_TO], [_column(m.key), quote(_TX_TO)]),
+        *(([_live(f)], [quote(_live(f))]) for f in m.fields if f.target is not None),
     ]
+    return [_index_sql(m, names, columns) for names, columns in indexes]
+
+
+def _index_sql(m: EntityMeta, names: list[str], columns: list[str]) -> str:
+    """An index named after the table and `names`, on `columns`, which are already SQL."""
+    name = "__".join((m.table, *names))
+    return f"CREATE INDEX IF NOT EXISTS {quote(name)} ON {quote(m.table)} ({', '.join(columns)})"
 
 
 def _column_def(f: FieldMeta) -> str:

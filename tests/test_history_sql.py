@@ -45,7 +45,7 @@ def test_indexes_start_with_tx_to_and_every_ref_gets_an_index_on_its_live_column
     ]
     assert version_index_sqls(m) == [
         'CREATE INDEX IF NOT EXISTS "order__tx_to__tx_from" ON "order" ("tx_to", "tx_from")',
-        'CREATE INDEX IF NOT EXISTS "order__id__tx_from" ON "order" ("id", "tx_from")',
+        'CREATE INDEX IF NOT EXISTS "order__id__tx_to" ON "order" ("id", "tx_to")',
         'CREATE INDEX IF NOT EXISTS "order__live_customer" ON "order" ("live_customer")',
     ]
 

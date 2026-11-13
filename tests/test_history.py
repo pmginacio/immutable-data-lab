@@ -7,6 +7,9 @@ import pytest
 
 import inlay.history
 from inlay import AlreadyExists, BrokenRef, Missing, Ref, StoreError, entity, key
+from inlay.history.sql import delete_by_key_sql, select_sql
+from inlay.meta import meta
+from inlay.nodes import Compare, Filter, Table
 
 CURRENT = 2**63 - 1
 
@@ -49,6 +52,21 @@ def versions(path, table):
 def transactions(path):
     with closing(sqlite3.connect(path)) as conn:
         return conn.execute('SELECT "tx", "at" FROM "inlay_tx" ORDER BY "tx"').fetchall()
+
+
+@pytest.mark.parametrize(
+    "sql, params",
+    [
+        select_sql(Filter(Table(Order), Compare(meta(Order).key, "==", "o1")), None),
+        (delete_by_key_sql(meta(Order)), ["o1"]),
+    ],
+    ids=["get", "end a version"],
+)
+def test_a_current_version_is_found_by_key_without_scanning(db, path, sql, params):
+    # Without statistics SQLite could also pick (tx_to, tx_from) and walk every current row.
+    with closing(sqlite3.connect(path)) as conn:
+        plan = [row[3] for row in conn.execute(f"EXPLAIN QUERY PLAN {sql}", params)]
+    assert "SEARCH order USING INDEX order__id__tx_to (id=? AND tx_to=?)" in plan
 
 
 def test_an_update_keeps_the_old_version_and_reads_the_new_one(db, path):
