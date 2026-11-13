@@ -289,7 +289,7 @@ class Order:                   # the new shape
     customer: Ref[Customer]
     total_amount: int
 
-# ---- migration: delete all of this once every db file has been migrated ----
+# ---- migration: delete all of this once it has run ----
 @entity(indexes=[("customer",)])
 class OrderLegacy:             # the old class, renamed
     id: str = key()
@@ -300,14 +300,14 @@ def add_total_amount(db: Db) -> None:
         lines = db[LineItem].filter(LineItem.order == old.id)
         db.add(Order(id=old.id, customer=old.customer, total_amount=lines.sum(LineItem.price * LineItem.qty)))
 
-inlay.migrate("shop.db", add_total_amount, OrderLegacy, Order, other_entities=[LineItem])    # migrates a db file once, and does nothing after that
+inlay.migrate("shop.db", add_total_amount, OrderLegacy, Order, other_entities=[LineItem])    # runs once, and does nothing after that
 # ---- end of migration ----
 
 with inlay.open("shop.db", [Customer, Order, LineItem]) as db:
     ...
 ```
 
-After: once every db file has been migrated, everything between the two markers is deleted, and the new `Order` is all that is left.
+After: once the migration has run, everything between the two markers is deleted, and the new `Order` is all that is left.
 
 ```python
 @entity(indexes=[("customer",)])
