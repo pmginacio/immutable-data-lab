@@ -189,3 +189,51 @@ def test_a_db_without_the_old_table_is_refused(tmp_path):
         pass
     with pytest.raises(SchemaMismatch, match="cannot migrate Order to Purchase"):
         inlay.migrate(path, add_discount_to_purchase, OldOrder, Purchase)
+
+
+def old_category() -> type:
+    """The class of the table category as it was when the file was written."""
+
+    @entity(indexes=[("parent",)])
+    class Category:
+        id: str = key()
+        parent: Ref[Category]
+        name: str
+
+    return Category
+
+
+@entity(indexes=[("parent",)])
+class CategoryLegacy:
+    id: str = key()
+    parent: Ref[CategoryLegacy]
+    name: str
+
+
+@entity(indexes=[("parent",)])
+class Category:
+    id: str = key()
+    parent: Ref[Category]
+    name: str
+    top_level: bool
+
+
+def test_a_class_that_refers_to_itself_is_migrated_with_its_references(tmp_path):
+    path = tmp_path / "shop.db"
+    old = old_category()
+    with inlay.open(path, [old]) as db:
+        db.add(old(id="all", parent="all", name="All"), old(id="books", parent="all", name="Books"))
+        db.add(old(id="novels", parent="books", name="Novels"))
+
+    def add_top_level(db: Db) -> None:
+        # The reference to itself leads to the old records while the migration runs.
+        top = {c.id for c in db[CategoryLegacy].filter(CategoryLegacy.parent.name == "All")}
+        db.add(*(Category(id=c.id, parent=c.parent, name=c.name, top_level=c.id in top) for c in db[CategoryLegacy]))
+
+    inlay.migrate(path, add_top_level, CategoryLegacy, Category)
+    with inlay.open(path, [Category]) as db:
+        assert {c.id: (c.parent, c.top_level) for c in db[Category]} == {
+            "all": ("all", True),
+            "books": ("all", True),
+            "novels": ("books", False),
+        }

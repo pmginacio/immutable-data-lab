@@ -150,9 +150,9 @@ Everything after that step is shared.
 2. `BEGIN IMMEDIATE`.
 3. If the new class's table already has the new shape, commit and return: the migration is done.
 4. If the new class's table holds the old shape (case 1), rename it to the old class's table name.
-   The stored text carries the table name, so the old class's `CREATE TABLE` is written with the new class's table name for this comparison.
-5. Now both cases look the same.
-   Raise `SchemaMismatch` unless the old table exists with the old shape and the new table does not exist.
+   The stored text carries the table name, so the old class's `CREATE TABLE` is written with the new class's table name for this comparison, and so are its references to itself.
+5. Otherwise (case 2), raise `SchemaMismatch` unless the old table exists with the old shape and the new table does not exist.
+   Case 1 is not checked again after the move: with `legacy_alter_table` on, the moved table's references to itself still name the new class's table.
 6. Create the new table.
 7. Call `upgrade(db)`.
    It reads the old class and writes the new one, and it can use any class passed in `other_entities`.
@@ -244,8 +244,7 @@ If a class were set up the first time `db[T]` uses it, as in the follow-up on no
   With foreign keys off and `legacy_alter_table` on, it keeps them, and `foreign_key_check` is clean after the swap and the drop.
 - Built and tested: everything under Implementation, in `tests/test_schema_sql.py`, `tests/test_rename.py` and `tests/test_migrate.py`.
 - `pragma_foreign_key_list` works as a table-valued function in the bundled SQLite (3.54), and the stored text of an index has no `IF NOT EXISTS` and names the new table after a rename.
-- Not tested: a class that refers to itself, migrated in case 1.
-  Its old class has to refer to the new class, so that the stored `REFERENCES` text matches.
+- A class that refers to itself, migrated in case 1: the old class refers to itself, as it did when the file was written, and while `upgrade` runs that reference leads to the old records.
 
 ### Out of scope
 

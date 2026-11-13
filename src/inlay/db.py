@@ -396,10 +396,9 @@ def migrate(
         if stored == create_table_sql(new_meta):
             return
         if stored == create_table_sql(old_meta, new_meta.table):
+            # The stored text keeps its references to itself under the new table's name, so it is not checked again.
             conn.execute(rename_table_sql(new_meta.table, old_meta.table))
-            tables = dict(conn.execute(LIST_TABLES))
-        # Whichever way it started, the old table is stored under its own name and the new one does not exist yet.
-        if tables.get(old_meta.table) != create_table_sql(old_meta) or new_meta.table in tables:
+        elif tables.get(old_meta.table) != create_table_sql(old_meta) or stored is not None:
             raise SchemaMismatch(
                 f"cannot migrate {old.__name__} to {new.__name__}: the db needs a table {old_meta.table!r} "
                 f"that matches {old.__name__} and no table {new_meta.table!r}"

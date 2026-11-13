@@ -50,8 +50,10 @@ def create_table_sql(m: EntityMeta, table: str | None = None) -> str:
     """Written exactly the way SQLite stores it, so it can be compared with an existing table.
 
     `table` is the name to use instead of the table of `m`, to compare a table with the shape of another class.
+    References of `m` to itself use that name too, since they point to the same table.
     """
-    return f"CREATE TABLE {quote(table or m.table)} ({', '.join(map(_column_def, m.fields))}) STRICT"
+    table = table or m.table
+    return f"CREATE TABLE {quote(table)} ({', '.join(_column_def(f, table) for f in m.fields)}) STRICT"
 
 
 def create_index_sql(m: EntityMeta, index: tuple[FieldMeta, ...]) -> str:
@@ -97,14 +99,15 @@ def repoint_sql(table: str, stored_sql: str, old: EntityMeta, new: EntityMeta) -
     )
 
 
-def _column_def(f: FieldMeta) -> str:
+def _column_def(f: FieldMeta, table: str) -> str:
     sql = f"{quote(f.name)} {SQL_TYPES[f.py_type]} NOT NULL"
     if f.is_key:
         sql += " PRIMARY KEY"
     if f.target is not None:
         target = meta(f.target)
+        target_table = table if f.target is f.owner else target.table
         # Checked at commit, so the order of writes inside a transaction does not matter.
-        sql += f" REFERENCES {quote(target.table)} ({quote(target.key.name)}) DEFERRABLE INITIALLY DEFERRED"
+        sql += f" REFERENCES {quote(target_table)} ({quote(target.key.name)}) DEFERRABLE INITIALLY DEFERRED"
     return sql
 
 
