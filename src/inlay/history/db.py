@@ -255,10 +255,12 @@ class Db:
         with _transaction(self._conn):
             for m, group in groups:
                 close, insert = delete_by_key_sql(m), insert_sql(m)
+                key = m.fields.index(m.key)
                 # One record at a time, so the same key twice in a call ends with the last record.
                 for o in group:
-                    self._conn.execute(close, (to_sql(getattr(o, m.key.name)),))
-                    self._conn.execute(insert, _row(m, o))
+                    row = _row(m, o)
+                    self._conn.execute(close, (row[key],))
+                    self._conn.execute(insert, row)
 
     def remove(self, *objs: object) -> None:
         groups = self._grouped(objs)
