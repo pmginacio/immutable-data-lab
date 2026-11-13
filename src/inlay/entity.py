@@ -1,4 +1,3 @@
-import re
 import uuid
 from annotationlib import Format, get_annotations
 from collections.abc import Callable, Sequence
@@ -6,7 +5,7 @@ from dataclasses import Field, dataclass, field, fields
 from typing import Any, dataclass_transform, get_args, get_origin, overload
 
 from inlay.conditions import Expr
-from inlay.meta import EntityMeta, FieldMeta
+from inlay.meta import EntityMeta, FieldMeta, table_name
 from inlay.types import SQL_TYPES
 
 _KEY = "inlay_key"
@@ -63,7 +62,7 @@ def entity(
     cls: type | None = None, /, *, table: str | None = None, indexes: Sequence[tuple[str, ...]] = ()
 ) -> Any:
     def wrap(c: type) -> type:
-        return _make_entity(c, table or _snake_case(c.__name__), tuple(tuple(i) for i in indexes))
+        return _make_entity(c, table or table_name(c.__name__), tuple(tuple(i) for i in indexes))
 
     return wrap if cls is None else wrap(cls)
 
@@ -119,8 +118,3 @@ def _check(cls_name: str, field_metas: tuple[FieldMeta, ...], indexes: tuple[tup
             raise TypeError(
                 f"{cls_name}.{f.name} is a Ref but no index starts with it; add ({f.name!r},) to indexes"
             )
-
-
-def _snake_case(name: str) -> str:
-    name = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", name)
-    return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name).lower()

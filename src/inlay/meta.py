@@ -1,3 +1,4 @@
+import re
 from annotationlib import ForwardRef
 from dataclasses import dataclass
 
@@ -40,3 +41,8 @@ def meta(cls: type) -> EntityMeta:
     if not isinstance(m, EntityMeta):
         raise TypeError(f"{cls.__name__} is not an @entity class")
     return m
+
+
+def table_name(class_name: str) -> str:
+    name = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", class_name)
+    return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name).lower()
