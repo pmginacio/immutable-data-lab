@@ -4,7 +4,7 @@ from collections import Counter
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from types import TracebackType
 from typing import Any, Final, Self, overload
 
@@ -16,7 +16,6 @@ from inlay.history.sql import (
     COMMIT,
     CONNECTION_SETUP,
     CREATE_TX_TABLE,
-    CURRENT,
     LATEST_TX,
     LIST_TABLES,
     NEXT_TX,
@@ -309,35 +308,26 @@ def _check_idle(reading: Counter[type], classes: Iterable[type]) -> None:
             raise RuntimeError(f"{cls.__name__} changed during iteration")
 
 
+# Each is: the statement that begins, the ones that open the body, the one that ends, and the ones that undo.
+# A new transaction takes the next transaction number, which the writes inside it use; a savepoint shares it.
 # ROLLBACK TO leaves the savepoint open, so it is released as well.
-_TOP_LEVEL = (BEGIN, COMMIT, (ROLLBACK,))
-_NESTED = (SAVEPOINT, RELEASE, (ROLLBACK_TO, RELEASE))
+_TOP_LEVEL = (BEGIN, (NEXT_TX,), COMMIT, (ROLLBACK,))
+_NESTED = (SAVEPOINT, (), RELEASE, (ROLLBACK_TO, RELEASE))
 
 
 @contextmanager
 def _transaction(conn: sqlite3.Connection) -> Iterator[None]:
-    """Runs a new transaction, or a savepoint inside an open one, so a failed call leaves nothing behind.
-
-    A new transaction takes the next transaction number, which the writes inside it use.
-    """
-    nested = conn.in_transaction
-    begin, end, undo = _NESTED if nested else _TOP_LEVEL
+    """Runs a new transaction, or a savepoint inside an open one, so a failed call leaves nothing behind."""
+    begin, start, end, undo = _NESTED if conn.in_transaction else _TOP_LEVEL
     with _store_errors():
         conn.execute(begin)
         try:
-            if not nested:
-                _next_tx(conn)
+            _execute_all(conn, start)
             yield
             conn.execute(end)
         except BaseException:
             _execute_all(conn, undo)
             raise
-
-
-def _next_tx(conn: sqlite3.Connection) -> None:
-    (tx,) = conn.execute(NEXT_TX, (to_sql(datetime.now(UTC)),)).fetchone()
-    if tx >= CURRENT:
-        raise StoreError("the db has used every transaction number and cannot be written to")
 
 
 @contextmanager
@@ -346,6 +336,8 @@ def _store_errors() -> Iterator[None]:
         yield
     except sqlite3.IntegrityError as e:
         match e.sqlite_errorname:
+            case "SQLITE_CONSTRAINT_CHECK":  # the only check is the one on transaction numbers
+                raise StoreError("the db has used every transaction number and cannot be written to") from e
             case "SQLITE_CONSTRAINT_UNIQUE":
                 raise AlreadyExists(str(e)) from e
             case "SQLITE_CONSTRAINT_FOREIGNKEY":

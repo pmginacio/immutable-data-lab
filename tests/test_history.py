@@ -146,6 +146,9 @@ def test_no_transaction_takes_the_number_that_marks_a_current_version(db, path):
     with pytest.raises(StoreError, match="every transaction number"):
         db.update(replace(O1, total=20))
     assert versions(path, "order") == [("o1", 1, CURRENT)]
+    # The refused transaction was rolled back, so another connection can take the write lock at once.
+    with closing(sqlite3.connect(path, timeout=0)) as conn:
+        conn.execute("BEGIN IMMEDIATE")
 
 
 def test_a_snapshot_reads_the_records_as_they_were(db):
@@ -190,6 +193,11 @@ def test_as_of_a_time_reads_the_last_transaction_at_or_before_it(db, path):
     assert [o.total for o in db.as_of(datetime(2026, 1, 15, tzinfo=UTC))[Order]] == [10]
     assert [o.total for o in db.as_of(datetime(2026, 2, 1, tzinfo=UTC))[Order]] == [20]
     assert list(db.as_of(datetime(2025, 1, 1, tzinfo=UTC))[Order]) == []
+
+
+def test_as_of_now_reads_the_latest_transaction(db):
+    db.update(replace(O1, total=20))
+    assert db.as_of(datetime.now(UTC)).tx == db.tx == 2
 
 
 @pytest.mark.parametrize(

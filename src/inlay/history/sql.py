@@ -45,16 +45,20 @@ _TX_TO = "tx_to"
 CURRENT: Final = 2**63 - 1
 _IS_CURRENT = f"{quote(_TX_TO)} = {CURRENT}"
 
-# The table of transactions, with the number and the time of each.
+# The table of transactions, with the number and the UTC time of each.
+# The check keeps a transaction from taking the number that marks a current version.
 TX_TABLE = "inlay_tx"
-CREATE_TX_TABLE = f'CREATE TABLE {quote(TX_TABLE)} ("tx" INTEGER PRIMARY KEY, "at" TEXT NOT NULL) STRICT'
-# The time of a transaction is never earlier than the one before, even when the clock goes back.
+CREATE_TX_TABLE = (
+    f'CREATE TABLE {quote(TX_TABLE)} ("tx" INTEGER PRIMARY KEY CHECK ("tx" < {CURRENT}), "at" TEXT NOT NULL) STRICT'
+)
+# Starts a transaction: the next number, at a time never earlier than the one before, even when the clock goes back.
 NEXT_TX = (
-    f'INSERT INTO {quote(TX_TABLE)} ("at") SELECT max(?, coalesce(max("at"), \'\')) FROM {quote(TX_TABLE)} '
-    'RETURNING "tx"'
+    f"INSERT INTO {quote(TX_TABLE)} (\"at\") "
+    f"SELECT max(strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now'), coalesce(max(\"at\"), '')) FROM {quote(TX_TABLE)}"
 )
 LATEST_TX = f'SELECT coalesce(max("tx"), 0) FROM {quote(TX_TABLE)}'
-TX_AT = f'{LATEST_TX} WHERE "at" <= ?'
+# julianday reads both SQLite's times and Python's, which differ in their digits of a second.
+TX_AT = f'{LATEST_TX} WHERE julianday("at") <= julianday(?)'
 # Every top-level transaction adds its row first and holds the write lock, so the largest number is its own.
 _THIS_TX = f'(SELECT max("tx") FROM {quote(TX_TABLE)})'
 
