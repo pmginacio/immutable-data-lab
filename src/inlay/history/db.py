@@ -287,12 +287,10 @@ def _insert(conn: sqlite3.Connection, m: EntityMeta, group: list[object]) -> Non
 
 
 def _update(conn: sqlite3.Connection, m: EntityMeta, group: list[object]) -> None:
-    close, insert = delete_by_key_sql(m), insert_sql(m)
-    key = m.fields.index(m.key)
-    # One record at a time, so the same key twice in a call ends with the last record.
-    for row in _rows(m, group):
-        conn.execute(close, (row[key],))
-        conn.execute(insert, row)
+    # The last record with each key wins, as if they were written one by one.
+    latest = {getattr(o, m.key.name): o for o in group}
+    conn.executemany(delete_by_key_sql(m), ((to_sql(k),) for k in latest))
+    _insert(conn, m, list(latest.values()))
 
 
 def _remove(conn: sqlite3.Connection, m: EntityMeta, group: list[object]) -> None:
