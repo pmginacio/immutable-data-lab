@@ -250,10 +250,11 @@ class Db:
 
     def update(self, *objs: object) -> None:
         """Adds each record, or replaces the one with the same key, which stays in the history."""
-        groups = self._grouped(objs)
-        _check_idle(self._reading, [m.cls for m, _ in groups])
+        groups = _grouped(objs)
+        _check_idle(self._reading, groups)
         with _transaction(self._conn):
-            for m, group in groups:
+            for cls, group in groups.items():
+                m = _meta_in(self._metas, cls)
                 close, insert = delete_by_key_sql(m), insert_sql(m)
                 key = m.fields.index(m.key)
                 # One record at a time, so the same key twice in a call ends with the last record.
@@ -263,13 +264,14 @@ class Db:
                     self._conn.execute(insert, row)
 
     def remove(self, *objs: object) -> None:
-        groups = self._grouped(objs)
-        _check_idle(self._reading, [m.cls for m, _ in groups])
+        groups = _grouped(objs)
+        _check_idle(self._reading, groups)
         with _transaction(self._conn):
-            for m, group in groups:
+            for cls, group in groups.items():
+                m = _meta_in(self._metas, cls)
                 deleted = self._conn.executemany(delete_equal_sql(m), (_row(m, o) for o in group)).rowcount
                 if deleted != len(group):
-                    raise Missing(f"{len(group) - deleted} of the {m.cls.__name__} records are not stored")
+                    raise Missing(f"{len(group) - deleted} of the {cls.__name__} records are not stored")
 
     def discard(self, *objs: object) -> None:
         self._write(delete_equal_sql, objs)
@@ -285,19 +287,21 @@ class Db:
     ) -> None:
         self.close()
 
-    def _grouped(self, objs: Sequence[object]) -> list[tuple[EntityMeta, list[object]]]:
-        """The records of each class, so each class is written with one statement, in the order classes appear."""
-        groups: defaultdict[type, list[object]] = defaultdict(list)
-        for o in objs:
-            groups[type(o)].append(o)
-        return [(_meta_in(self._metas, cls), group) for cls, group in groups.items()]
-
     def _write(self, sql_for: Callable[[EntityMeta], str], objs: Sequence[object]) -> None:
-        groups = self._grouped(objs)
-        _check_idle(self._reading, [m.cls for m, _ in groups])
+        groups = _grouped(objs)
+        _check_idle(self._reading, groups)
         with _transaction(self._conn):
-            for m, group in groups:
+            for cls, group in groups.items():
+                m = _meta_in(self._metas, cls)
                 self._conn.executemany(sql_for(m), (_row(m, o) for o in group))
+
+
+def _grouped(objs: Iterable[object]) -> dict[type, list[object]]:
+    """The records of each class, so each class is written with one statement, in the order classes appear."""
+    groups: defaultdict[type, list[object]] = defaultdict(list)
+    for o in objs:
+        groups[type(o)].append(o)
+    return groups
 
 
 def _meta_in(metas: Mapping[type, EntityMeta], cls: type) -> EntityMeta:

@@ -241,13 +241,14 @@ class Db:
         self._write(upsert_sql, objs)
 
     def remove(self, *objs: object) -> None:
-        groups = self._grouped(objs)
-        _check_idle(self._reading, [m.cls for m, _ in groups])
+        groups = _grouped(objs)
+        _check_idle(self._reading, groups)
         with _transaction(self._conn):
-            for m, group in groups:
+            for cls, group in groups.items():
+                m = self._meta(cls)
                 deleted = self._conn.executemany(delete_equal_sql(m), (_row(m, o) for o in group)).rowcount
                 if deleted != len(group):
-                    raise Missing(f"{len(group) - deleted} of the {m.cls.__name__} records are not stored")
+                    raise Missing(f"{len(group) - deleted} of the {cls.__name__} records are not stored")
 
     def discard(self, *objs: object) -> None:
         self._write(delete_equal_sql, objs)
@@ -269,19 +270,21 @@ class Db:
         except KeyError:
             raise KeyError(f"{cls.__name__} was not passed to inlay.open") from None
 
-    def _grouped(self, objs: Sequence[object]) -> list[tuple[EntityMeta, list[object]]]:
-        """The records of each class, so each class is written with one statement, in the order classes appear."""
-        groups: defaultdict[type, list[object]] = defaultdict(list)
-        for o in objs:
-            groups[type(o)].append(o)
-        return [(self._meta(cls), group) for cls, group in groups.items()]
-
     def _write(self, sql_for: Callable[[EntityMeta], str], objs: Sequence[object]) -> None:
-        groups = self._grouped(objs)
-        _check_idle(self._reading, [m.cls for m, _ in groups])
+        groups = _grouped(objs)
+        _check_idle(self._reading, groups)
         with _transaction(self._conn):
-            for m, group in groups:
+            for cls, group in groups.items():
+                m = self._meta(cls)
                 self._conn.executemany(sql_for(m), (_row(m, o) for o in group))
+
+
+def _grouped(objs: Iterable[object]) -> dict[type, list[object]]:
+    """The records of each class, so each class is written with one statement, in the order classes appear."""
+    groups: defaultdict[type, list[object]] = defaultdict(list)
+    for o in objs:
+        groups[type(o)].append(o)
+    return groups
 
 
 def _check_idle(reading: Counter[type], classes: Iterable[type]) -> None:
