@@ -289,7 +289,7 @@ def _check_idle(reading: Counter[type], classes: Iterable[type]) -> None:
 
 
 # ROLLBACK TO leaves the savepoint open, so it is released as well.
-_TOP_LEVEL = (BEGIN, COMMIT, (ROLLBACK,))
+_TOP_LEVEL = (BEGIN, COMMIT, ROLLBACK)
 _NESTED = (SAVEPOINT, RELEASE, (ROLLBACK_TO, RELEASE))
 
 
@@ -298,12 +298,12 @@ def _transaction(conn: sqlite3.Connection) -> Iterator[None]:
     """Runs a new transaction, or a savepoint inside an open one, so a failed call leaves nothing behind."""
     begin, end, undo = _NESTED if conn.in_transaction else _TOP_LEVEL
     with _store_errors():
-        conn.execute(begin)
+        _execute(conn, begin)
         try:
             yield
-            conn.execute(end)
+            _execute(conn, end)
         except BaseException:
-            _execute_all(conn, undo)
+            _execute(conn, undo)
             raise
 
 
@@ -337,12 +337,12 @@ def open(entities: Iterable[type], *, path: str | os.PathLike[str] = DEFAULT_PAT
     _check_refs(metas)
     conn = _connect(path, create=True)
     try:
-        _execute_all(conn, (*CONNECTION_SETUP, BEGIN))
+        _execute(conn, (*CONNECTION_SETUP, BEGIN))
         tables = dict(conn.execute(LIST_TABLES))
         _check_tables(metas.values(), tables)
         create_tables = [create_table_sql(m) for m in metas.values() if m.table not in tables]
         create_indexes = [create_index_sql(m, i) for m in metas.values() for i in m.indexes]
-        _execute_all(conn, (*create_tables, *create_indexes, COMMIT))
+        _execute(conn, (*create_tables, *create_indexes, COMMIT))
     except BaseException:
         conn.close()  # also rolls back the schema changes
         raise
@@ -358,7 +358,7 @@ def rename(old: str, new: str, *, path: str | os.PathLike[str] = DEFAULT_PATH) -
     conn = _connect(path, create=False)
     try:
         # With foreign keys on, SQLite also rewrites the references to the renamed table in the other tables.
-        _execute_all(conn, ("PRAGMA foreign_keys = ON", BEGIN))
+        _execute(conn, ("PRAGMA foreign_keys = ON", BEGIN))
         tables = dict(conn.execute(LIST_TABLES))
         if old_table not in tables:
             raise SchemaMismatch(f"there is no table {old_table!r} to rename")
@@ -367,7 +367,7 @@ def rename(old: str, new: str, *, path: str | os.PathLike[str] = DEFAULT_PATH) -
         conn.execute(rename_table_sql(old_table, new_table))
         for name, sql in conn.execute(LIST_INDEXES, (new_table,)).fetchall():
             if name.startswith(f"{old_table}__"):
-                _execute_all(conn, reprefix_index_sql(name, sql, old_table, new_table))
+                _execute(conn, reprefix_index_sql(name, sql, old_table, new_table))
         conn.execute(COMMIT)
     finally:
         conn.close()  # also rolls back what was not committed
@@ -394,7 +394,7 @@ def migrate(
     metas = _metas((old, new, *other_entities))
     conn = _connect(path, create=False)
     try:
-        _execute_all(conn, (*MIGRATION_SETUP, BEGIN))
+        _execute(conn, (*MIGRATION_SETUP, BEGIN))
         tables = dict(conn.execute(LIST_TABLES))
         stored = tables.get(new_meta.table)
         if stored == create_table_sql(new_meta):
@@ -412,7 +412,7 @@ def migrate(
         _repoint_referrers(conn, old_meta, new_meta)
         conn.execute(drop_table_sql(old_meta.table))
         # The indexes come last: a moved table keeps its index names, and `IF NOT EXISTS` would skip a clash.
-        _execute_all(conn, (create_index_sql(new_meta, index) for index in new_meta.indexes))
+        _execute(conn, (create_index_sql(new_meta, index) for index in new_meta.indexes))
         _check_tables(metas.values(), dict(conn.execute(LIST_TABLES)))
         _check_foreign_keys(conn)
         conn.execute(COMMIT)
@@ -426,8 +426,8 @@ def _repoint_referrers(conn: sqlite3.Connection, old: EntityMeta, new: EntityMet
     for (table,) in conn.execute(REFERRERS, (old.table,)).fetchall():
         if table != old.table:
             indexes = conn.execute(LIST_INDEXES, (table,)).fetchall()
-            _execute_all(conn, repoint_sql(table, tables[table], old, new))
-            _execute_all(conn, (sql for _, sql in indexes))  # dropping the table dropped them
+            _execute(conn, repoint_sql(table, tables[table], old, new))
+            _execute(conn, (sql for _, sql in indexes))  # dropping the table dropped them
 
 
 def _check_foreign_keys(conn: sqlite3.Connection) -> None:
@@ -446,8 +446,10 @@ def _connect(path: str | os.PathLike[str], *, create: bool) -> sqlite3.Connectio
     return sqlite3.connect(f"file:{quote(os.fspath(path))}?mode=rw", uri=True, autocommit=True)
 
 
-def _execute_all(conn: sqlite3.Connection, statements: Iterable[str]) -> None:
-    for statement in statements:
+def _execute(conn: sqlite3.Connection, statements: str | Iterable[str]) -> None:
+    """Runs one statement, or several in order."""
+    # A string is also an iterable of strings, one for each character, so it is checked first.
+    for statement in (statements,) if isinstance(statements, str) else statements:
         conn.execute(statement)
 
 

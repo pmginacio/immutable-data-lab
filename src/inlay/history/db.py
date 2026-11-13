@@ -311,7 +311,7 @@ def _check_idle(reading: Counter[type], classes: Iterable[type]) -> None:
 # Each is: the statement that begins, the ones that open the body, the one that ends, and the ones that undo.
 # A new transaction takes the next transaction number, which the writes inside it use; a savepoint shares it.
 # ROLLBACK TO leaves the savepoint open, so it is released as well.
-_TOP_LEVEL = (BEGIN, (NEXT_TX,), COMMIT, (ROLLBACK,))
+_TOP_LEVEL = (BEGIN, NEXT_TX, COMMIT, ROLLBACK)
 _NESTED = (SAVEPOINT, (), RELEASE, (ROLLBACK_TO, RELEASE))
 
 
@@ -320,13 +320,13 @@ def _transaction(conn: sqlite3.Connection) -> Iterator[None]:
     """Runs a new transaction, or a savepoint inside an open one, so a failed call leaves nothing behind."""
     begin, start, end, undo = _NESTED if conn.in_transaction else _TOP_LEVEL
     with _store_errors():
-        conn.execute(begin)
+        _execute(conn, begin)
         try:
-            _execute_all(conn, start)
+            _execute(conn, start)
             yield
-            conn.execute(end)
+            _execute(conn, end)
         except BaseException:
-            _execute_all(conn, undo)
+            _execute(conn, undo)
             raise
 
 
@@ -362,22 +362,24 @@ def open(entities: Iterable[type], *, path: str | os.PathLike[str] = DEFAULT_PAT
     _check_refs(metas)
     conn = sqlite3.connect(path, autocommit=True)
     try:
-        _execute_all(conn, (*CONNECTION_SETUP, BEGIN))
+        _execute(conn, (*CONNECTION_SETUP, BEGIN))
         tables = dict(conn.execute(LIST_TABLES))
         _check_tables(metas.values(), tables)
         create_tx = [CREATE_TX_TABLE] if TX_TABLE not in tables else []
         create_tables = [create_table_sql(m) for m in metas.values() if m.table not in tables]
         create_indexes = [create_index_sql(m, i) for m in metas.values() for i in m.indexes]
         version_indexes = [sql for m in metas.values() for sql in version_index_sqls(m)]
-        _execute_all(conn, (*create_tx, *create_tables, *create_indexes, *version_indexes, COMMIT))
+        _execute(conn, (*create_tx, *create_tables, *create_indexes, *version_indexes, COMMIT))
     except BaseException:
         conn.close()  # also rolls back the schema changes
         raise
     return Db(conn, metas)
 
 
-def _execute_all(conn: sqlite3.Connection, statements: Iterable[str]) -> None:
-    for statement in statements:
+def _execute(conn: sqlite3.Connection, statements: str | Iterable[str]) -> None:
+    """Runs one statement, or several in order."""
+    # A string is also an iterable of strings, one for each character, so it is checked first.
+    for statement in (statements,) if isinstance(statements, str) else statements:
         conn.execute(statement)
 
 
