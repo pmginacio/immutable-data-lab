@@ -32,6 +32,14 @@ SAVEPOINT = "SAVEPOINT inlay"
 RELEASE = "RELEASE inlay"
 ROLLBACK_TO = "ROLLBACK TO inlay"
 LIST_TABLES = "SELECT name, sql FROM sqlite_master WHERE type = 'table'"
+LIST_INDEXES = "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL"
+REFERRERS = (
+    "SELECT DISTINCT m.name FROM sqlite_master AS m, pragma_foreign_key_list(m.name) AS f "
+    "WHERE m.type = 'table' AND f.\"table\" = ?"
+)
+# Foreign keys are not checked while tables are swapped, and renaming a table leaves the references to it alone.
+MIGRATION_SETUP = ("PRAGMA foreign_keys = OFF", "PRAGMA legacy_alter_table = ON")
+FOREIGN_KEY_CHECK = "PRAGMA foreign_key_check"
 
 
 def quote(name: str) -> str:
@@ -47,6 +55,43 @@ def create_index_sql(m: EntityMeta, index: tuple[FieldMeta, ...]) -> str:
     name = "__".join((m.table, *(f.name for f in index)))
     columns = ", ".join(quote(f.name) for f in index)
     return f"CREATE INDEX IF NOT EXISTS {quote(name)} ON {quote(m.table)} ({columns})"
+
+
+def rename_table_sql(old: str, new: str) -> str:
+    return f"ALTER TABLE {quote(old)} RENAME TO {quote(new)}"
+
+
+def drop_table_sql(table: str) -> str:
+    return f"DROP TABLE {quote(table)}"
+
+
+def reprefix_index_sql(name: str, sql: str, old_table: str, new_table: str) -> tuple[str, str]:
+    """Drop an index of a renamed table and create it again, named after the new table.
+
+    `sql` is the stored text, which already says `ON` the new table.
+    """
+    new_name = new_table + name.removeprefix(old_table)
+    return f"DROP INDEX {quote(name)}", sql.replace(quote(name), quote(new_name), 1)
+
+
+def repoint_sql(table: str, stored_sql: str, old: EntityMeta, new: EntityMeta) -> tuple[str, ...]:
+    """Rebuild `table` so that its foreign keys to `old` point to `new`, keeping its rows.
+
+    `stored_sql` is the stored `CREATE TABLE` of `table`; it names its references in the format of `_column_def`.
+    """
+    reference = f"REFERENCES {quote(old.table)} ({quote(old.key.name)})"
+    if reference not in stored_sql:
+        raise ValueError(f"table {table!r} has no foreign key to {old.table!r}")
+    staging = f"{table}__rebuild"
+    prefix = f"CREATE TABLE {quote(table)} "
+    new_reference = f"REFERENCES {quote(new.table)} ({quote(new.key.name)})"
+    columns = stored_sql.removeprefix(prefix).replace(reference, new_reference)
+    return (
+        f"CREATE TABLE {quote(staging)} {columns}",
+        f"INSERT INTO {quote(staging)} SELECT * FROM {quote(table)}",
+        drop_table_sql(table),
+        rename_table_sql(staging, table),
+    )
 
 
 def _column_def(f: FieldMeta) -> str:
