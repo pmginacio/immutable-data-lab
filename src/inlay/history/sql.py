@@ -81,7 +81,7 @@ def create_table_sql(m: EntityMeta) -> str:
 def create_index_sql(m: EntityMeta, index: tuple[FieldMeta, ...]) -> str:
     """A declared index, after `tx_to`, so that reading the current versions is an exact match on its first column."""
     name = "__".join((m.table, *(f.name for f in index)))
-    columns = ", ".join(quote(f.name) for f in index)
+    columns = ", ".join(map(_column, index))
     return f"CREATE INDEX IF NOT EXISTS {quote(name)} ON {quote(m.table)} ({quote(_TX_TO)}, {columns})"
 
 
@@ -100,14 +100,14 @@ def version_index_sqls(m: EntityMeta) -> list[str]:
 
 
 def _column_def(f: FieldMeta) -> str:
-    return f"{quote(f.name)} {SQL_TYPES[f.py_type]} NOT NULL"
+    return f"{_column(f)} {SQL_TYPES[f.py_type]} NOT NULL"
 
 
 def _live_def(f: FieldMeta) -> str:
     """The column that holds `f` on the current version and NULL on the others, which SQLite leaves unchecked."""
     sql = (
         f"{quote(_live(f))} {SQL_TYPES[f.py_type]} GENERATED ALWAYS AS "
-        f"(CASE WHEN {_IS_CURRENT} THEN {quote(f.name)} END) VIRTUAL"
+        f"(CASE WHEN {_IS_CURRENT} THEN {_column(f)} END) VIRTUAL"
     )
     if f.target is None:  # the key
         return sql + " UNIQUE"
@@ -129,12 +129,12 @@ def insert_sql(m: EntityMeta) -> str:
 
 def delete_by_key_sql(m: EntityMeta) -> str:
     """Ends the current version with a key at this transaction. Nothing is deleted."""
-    return _close_sql(m, f"{quote(m.key.name)} = ?")
+    return _close_sql(m, f"{_column(m.key)} = ?")
 
 
 def delete_equal_sql(m: EntityMeta) -> str:
     """Ends the current version equal to a record at this transaction. Nothing is deleted."""
-    return _close_sql(m, " AND ".join(f"{quote(f.name)} = ?" for f in m.fields))
+    return _close_sql(m, " AND ".join(f"{_column(f)} = ?" for f in m.fields))
 
 
 def clear_sql(m: EntityMeta, cond: Condition) -> tuple[str, list[object]]:
@@ -195,7 +195,7 @@ def _join(items: Sequence[Condition], operator: str, empty: str, tx: int | None)
 def _keys_sql(records: Filter, tx: int | None) -> tuple[str, list[object]]:
     """A SELECT of the keys of `records` at transaction `tx`, and its parameters."""
     select = _select(records, tx)
-    return _render(select, quote(select.m.key.name))
+    return _render(select, _column(select.m.key))
 
 
 def value_sql(value: object) -> tuple[str, list[object]]:
@@ -316,7 +316,7 @@ def _render(select: _Select, columns: str) -> tuple[str, list[object]]:
             params += key_params
         if not any(key == select.m.key for key, _ in select.order):
             # The key breaks ties, so slices of the same order never repeat or skip a record.
-            order.append(quote(select.m.key.name))
+            order.append(_column(select.m.key))
         sql += f" ORDER BY {', '.join(order)}"
     if select.slice is not None:
         start, stop = select.slice
@@ -326,4 +326,4 @@ def _render(select: _Select, columns: str) -> tuple[str, list[object]]:
 
 
 def _columns(m: EntityMeta) -> str:
-    return ", ".join(quote(f.name) for f in m.fields)
+    return ", ".join(map(_column, m.fields))

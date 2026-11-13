@@ -61,7 +61,7 @@ def create_table_sql(m: EntityMeta, table: str | None = None) -> str:
 
 def create_index_sql(m: EntityMeta, index: tuple[FieldMeta, ...]) -> str:
     name = "__".join((m.table, *(f.name for f in index)))
-    columns = ", ".join(quote(f.name) for f in index)
+    columns = ", ".join(map(_column, index))
     return f"CREATE INDEX IF NOT EXISTS {quote(name)} ON {quote(m.table)} ({columns})"
 
 
@@ -87,12 +87,12 @@ def repoint_sql(table: str, stored_sql: str, old: EntityMeta, new: EntityMeta) -
 
     `stored_sql` is the stored `CREATE TABLE` of `table`; it names its references in the format of `_column_def`.
     """
-    reference = f"REFERENCES {quote(old.table)} ({quote(old.key.name)})"
+    reference = f"REFERENCES {quote(old.table)} ({_column(old.key)})"
     if reference not in stored_sql:
         raise ValueError(f"table {table!r} has no foreign key to {old.table!r}")
     staging = f"{table}__rebuild"
     prefix = f"CREATE TABLE {quote(table)} "
-    new_reference = f"REFERENCES {quote(new.table)} ({quote(new.key.name)})"
+    new_reference = f"REFERENCES {quote(new.table)} ({_column(new.key)})"
     columns = stored_sql.removeprefix(prefix).replace(reference, new_reference)
     return (
         f"CREATE TABLE {quote(staging)} {columns}",
@@ -103,14 +103,14 @@ def repoint_sql(table: str, stored_sql: str, old: EntityMeta, new: EntityMeta) -
 
 
 def _column_def(f: FieldMeta, table: str) -> str:
-    sql = f"{quote(f.name)} {SQL_TYPES[f.py_type]} NOT NULL"
+    sql = f"{_column(f)} {SQL_TYPES[f.py_type]} NOT NULL"
     if f.is_key:
         sql += " PRIMARY KEY"
     if f.target is not None:
         target = meta(f.target)
         target_table = table if f.target is f.owner else target.table
         # Checked at commit, so the order of writes inside a transaction does not matter.
-        sql += f" REFERENCES {quote(target_table)} ({quote(target.key.name)}) DEFERRABLE INITIALLY DEFERRED"
+        sql += f" REFERENCES {quote(target_table)} ({_column(target.key)}) DEFERRABLE INITIALLY DEFERRED"
     return sql
 
 
@@ -119,17 +119,17 @@ def insert_sql(m: EntityMeta) -> str:
 
 
 def upsert_sql(m: EntityMeta) -> str:
-    updates = ", ".join(f"{quote(f.name)} = excluded.{quote(f.name)}" for f in m.fields if not f.is_key)
+    updates = ", ".join(f"{_column(f)} = excluded.{_column(f)}" for f in m.fields if not f.is_key)
     action = f"DO UPDATE SET {updates}" if updates else "DO NOTHING"
-    return f"{insert_sql(m)} ON CONFLICT ({quote(m.key.name)}) {action}"
+    return f"{insert_sql(m)} ON CONFLICT ({_column(m.key)}) {action}"
 
 
 def delete_by_key_sql(m: EntityMeta) -> str:
-    return f"DELETE FROM {quote(m.table)} WHERE {quote(m.key.name)} = ?"
+    return f"DELETE FROM {quote(m.table)} WHERE {_column(m.key)} = ?"
 
 
 def delete_equal_sql(m: EntityMeta) -> str:
-    return f"DELETE FROM {quote(m.table)} WHERE {' AND '.join(f'{quote(f.name)} = ?' for f in m.fields)}"
+    return f"DELETE FROM {quote(m.table)} WHERE {' AND '.join(f'{_column(f)} = ?' for f in m.fields)}"
 
 
 def clear_sql(m: EntityMeta, cond: Condition) -> tuple[str, list[object]]:
@@ -183,7 +183,7 @@ def _join(items: Sequence[Condition], operator: str, empty: str) -> tuple[str, l
 def _keys_sql(records: Filter) -> tuple[str, list[object]]:
     """A SELECT of the keys of `records`, and its parameters."""
     select = _select(records)
-    return _render(select, quote(select.m.key.name))
+    return _render(select, _column(select.m.key))
 
 
 def value_sql(value: object) -> tuple[str, list[object]]:
@@ -288,7 +288,7 @@ def _render(select: _Select, columns: str) -> tuple[str, list[object]]:
             params += key_params
         if not any(key == select.m.key for key, _ in select.order):
             # The key breaks ties, so slices of the same order never repeat or skip a record.
-            order.append(quote(select.m.key.name))
+            order.append(_column(select.m.key))
         sql += f" ORDER BY {', '.join(order)}"
     if select.slice is not None:
         start, stop = select.slice
@@ -298,4 +298,4 @@ def _render(select: _Select, columns: str) -> tuple[str, list[object]]:
 
 
 def _columns(m: EntityMeta) -> str:
-    return ", ".join(quote(f.name) for f in m.fields)
+    return ", ".join(map(_column, m.fields))
