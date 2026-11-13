@@ -246,35 +246,17 @@ class Db:
         return _transaction(self._conn)
 
     def add(self, *objs: object) -> None:
-        self._write(insert_sql, objs)
+        self._write(objs, _insert)
 
     def update(self, *objs: object) -> None:
         """Adds each record, or replaces the one with the same key, which stays in the history."""
-        groups = _grouped(objs)
-        _check_idle(self._reading, groups)
-        with _transaction(self._conn):
-            for cls, group in groups.items():
-                m = _meta_in(self._metas, cls)
-                close, insert = delete_by_key_sql(m), insert_sql(m)
-                key = m.fields.index(m.key)
-                # One record at a time, so the same key twice in a call ends with the last record.
-                for o in group:
-                    row = _row(m, o)
-                    self._conn.execute(close, (row[key],))
-                    self._conn.execute(insert, row)
+        self._write(objs, _update)
 
     def remove(self, *objs: object) -> None:
-        groups = _grouped(objs)
-        _check_idle(self._reading, groups)
-        with _transaction(self._conn):
-            for cls, group in groups.items():
-                m = _meta_in(self._metas, cls)
-                deleted = self._conn.executemany(delete_equal_sql(m), (_row(m, o) for o in group)).rowcount
-                if deleted != len(group):
-                    raise Missing(f"{len(group) - deleted} of the {cls.__name__} records are not stored")
+        self._write(objs, _remove)
 
     def discard(self, *objs: object) -> None:
-        self._write(delete_equal_sql, objs)
+        self._write(objs, _discard)
 
     def close(self) -> None:
         self._conn.close()
@@ -287,13 +269,40 @@ class Db:
     ) -> None:
         self.close()
 
-    def _write(self, sql_for: Callable[[EntityMeta], str], objs: Sequence[object]) -> None:
+    def _write(self, objs: Sequence[object], write: _Write) -> None:
+        """Runs `write` on the records of each class, all in one transaction."""
         groups = _grouped(objs)
         _check_idle(self._reading, groups)
         with _transaction(self._conn):
             for cls, group in groups.items():
-                m = _meta_in(self._metas, cls)
-                self._conn.executemany(sql_for(m), (_row(m, o) for o in group))
+                write(self._conn, _meta_in(self._metas, cls), group)
+
+
+# Writes the records of one class. It runs inside the transaction, so raising undoes the whole call.
+type _Write = Callable[[sqlite3.Connection, EntityMeta, list[object]], None]
+
+
+def _insert(conn: sqlite3.Connection, m: EntityMeta, group: list[object]) -> None:
+    conn.executemany(insert_sql(m), _rows(m, group))
+
+
+def _update(conn: sqlite3.Connection, m: EntityMeta, group: list[object]) -> None:
+    close, insert = delete_by_key_sql(m), insert_sql(m)
+    key = m.fields.index(m.key)
+    # One record at a time, so the same key twice in a call ends with the last record.
+    for row in _rows(m, group):
+        conn.execute(close, (row[key],))
+        conn.execute(insert, row)
+
+
+def _remove(conn: sqlite3.Connection, m: EntityMeta, group: list[object]) -> None:
+    deleted = conn.executemany(delete_equal_sql(m), _rows(m, group)).rowcount
+    if deleted != len(group):
+        raise Missing(f"{len(group) - deleted} of the {m.cls.__name__} records are not stored")
+
+
+def _discard(conn: sqlite3.Connection, m: EntityMeta, group: list[object]) -> None:
+    conn.executemany(delete_equal_sql(m), _rows(m, group))
 
 
 def _grouped(objs: Iterable[object]) -> dict[type, list[object]]:
@@ -357,6 +366,10 @@ def _store_errors() -> Iterator[None]:
 
 def _row(m: EntityMeta, obj: object) -> tuple[object, ...]:
     return tuple(to_sql(getattr(obj, f.name)) for f in m.fields)
+
+
+def _rows(m: EntityMeta, objs: Iterable[object]) -> Iterator[tuple[object, ...]]:
+    return (_row(m, o) for o in objs)
 
 
 def _from_row(m: EntityMeta, row: Sequence[object]) -> Any:
