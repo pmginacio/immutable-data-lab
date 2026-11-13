@@ -251,6 +251,41 @@ A function takes one argument for now.
 
 A small shop app that uses all of this, with comments that point at each feature, is in [`examples/shop.py`](examples/shop.py).
 
+### Changing a class
+
+There are no migration files.
+A migration is a Python function that takes the db, and `migrate` runs it in one transaction: either all of it happens or none of it does.
+It changes the schema of one class, and you keep the old shape in the code as a class of its own while the migration exists:
+
+```python
+@entity(indexes=[("customer",)])
+class OrderLegacy:             # the old shape, stored in the table "order"
+    id: str = key()
+    customer: Ref[Customer]
+    total: int
+
+@entity(indexes=[("customer",)])
+class Order:                   # the new shape
+    id: str = key()
+    customer: Ref[Customer]
+    total: int
+    discount: int
+
+def add_discount(db: Db) -> None:
+    db.add(*(Order(id=o.id, customer=o.customer, total=o.total, discount=0) for o in db[OrderLegacy]))
+
+inlay.migrate("shop.db", add_discount, OrderLegacy, Order)
+```
+
+`migrate` sees that the table `order` still holds the old shape, moves it aside, creates the new table, and runs the function, which can read and write any records.
+Then it points the foreign keys of the other tables to the new table, drops the old one, and checks that the classes match their tables and that every reference points to a record.
+If the db already has the new table, nothing happens, so it is safe to call at every start.
+
+The new class can also have a name of its own: `inlay.migrate("shop.db", fn, Order, Purchase)` moves the data to a new table `purchase`, and the foreign keys of the other tables follow.
+The function gets a db with the old class, the new class, and any classes passed as a fourth argument, `other_entities`.
+To only rename a class, with no change to its fields, call `inlay.rename("shop.db", "Order", "Purchase")`: it renames the table, its indexes, and the references to it.
+A change that does not alter the schema is not a migration, just an ordinary write.
+
 ## Design
 
 **Records are values.**
@@ -313,7 +348,7 @@ Only the `db` module talks to SQLite.
 | `functions` | functions such as `to_month` and aggregates such as `avg`, each with its Python and SQL |
 | `types` | Python types to SQLite types, and back |
 | `sql` | pure functions that build one SQL statement or clause each |
-| `db` | `open`, the db, record sets and views, and transactions |
+| `db` | `open`, `migrate` and `rename`, the db, record sets and views, and transactions |
 
 ## What it does not do
 
@@ -323,7 +358,7 @@ This is version one, and the limits are on purpose.
 - A `Db` works only in the thread and process that opened it: open one in each.
 - Several processes creating the same new db file at once can fail: create it once first.
 - No optional fields, enums or composite keys.
-- No cascading deletes, reverse relations, or migrations.
+- No cascading deletes or reverse relations.
 - Few functions so far: arithmetic, `to_month` and `to_day`.
 - Slices that skip many records are slow, because SQLite reads and discards the skipped rows.
   Filtering from the last seen value avoids that.
@@ -342,5 +377,5 @@ uv run python examples/shop.py     # the example app
 
 - [`notes/2026-11-10-design-v1.md`](notes/2026-11-10-design-v1.md) is the full design of inlay, with the reasons for each choice, and its follow-ups.
 - [`notes/2026-11-11-sales-example-learnings.md`](notes/2026-11-11-sales-example-learnings.md) is what writing the sales example taught us about inlay, and the ideas it suggests.
-- [`notes/2026-11-13-migrations.md`](notes/2026-11-13-migrations.md) is an open design discussion on migrations and renaming classes.
+- [`notes/2026-11-13-migrations.md`](notes/2026-11-13-migrations.md) is the design of `migrate` and `rename`, and the discussion that led to it.
 - [`notes/2026-11-10-immutable-data-and-databases.md`](notes/2026-11-10-immutable-data-and-databases.md) is the background: immutable data, FP style, and database design in Python.

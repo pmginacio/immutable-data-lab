@@ -1,10 +1,8 @@
 # Migrations
 
 Notes from a design discussion on 2026-11-13.
-Nothing here is decided or built yet.
-The README lists migrations as out of scope for version one.
-
-The last section, "Current direction", is where the discussion ended up.
+The sections before "Current direction" are the discussion, and none of that is built.
+"Current direction" is where it ended up, and it is built: `inlay.migrate` and `inlay.rename`.
 It replaces the `migrations=[fn]` and `db.previous` parts above, and keeps the notes on renames and foreign keys.
 
 ## How it should feel
@@ -152,6 +150,7 @@ Everything after that step is shared.
 2. `BEGIN IMMEDIATE`.
 3. If the new class's table already has the new shape, commit and return: the migration is done.
 4. If the new class's table holds the old shape (case 1), rename it to the old class's table name.
+   The stored text carries the table name, so the old class's `CREATE TABLE` is written with the new class's table name for this comparison.
 5. Now both cases look the same.
    Raise `SchemaMismatch` unless the old table exists with the old shape and the new table does not exist.
 6. Create the new table.
@@ -240,8 +239,10 @@ If a class were set up the first time `db[T]` uses it, as in the follow-up on no
 
 - Checked in a scratch test: with foreign keys on, SQLite rewrites the references in other tables when a table is renamed.
   With foreign keys off and `legacy_alter_table` on, it keeps them, and `foreign_key_check` is clean after the swap and the drop.
-- Not built or tested: everything under Implementation.
-- Still to check at the start: that `pragma_foreign_key_list` works as a table-valued function in the bundled SQLite, and the exact `CREATE INDEX` text that SQLite stores.
+- Built and tested: everything under Implementation, in `tests/test_schema_sql.py`, `tests/test_rename.py` and `tests/test_migrate.py`.
+- `pragma_foreign_key_list` works as a table-valued function in the bundled SQLite (3.54), and the stored text of an index has no `IF NOT EXISTS` and names the new table after a rename.
+- Not tested: a class that refers to itself, migrated in case 1.
+  Its old class has to refer to the new class, so that the stored `REFERENCES` text matches.
 
 ### Out of scope
 
