@@ -321,9 +321,7 @@ This is version one, and the limits are on purpose.
 
 - SQLite only.
 - A `Db` works only in the thread and process that opened it: open one in each.
-- Several processes creating the same new db file at once can fail: create it once first.
-- The db file must be on a local disk.
-- No optional fields, enums or composite keys.
+- Several processes creating the same new db file at once can fail: create it once first.- No optional fields, enums or composite keys.
 - No cascading deletes, reverse relations, or migrations.
 - Few functions so far: arithmetic, `to_month` and `to_day`.
 - Slices that skip many records are slow, because SQLite reads and discards the skipped rows.
