@@ -6,7 +6,7 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from types import TracebackType
-from typing import Any, Final, Self, overload
+from typing import Any, Self, overload
 
 from inlay.conditions import own_value
 from inlay.db import AlreadyExists, BrokenRef, Missing, SchemaMismatch, StoreError
@@ -54,7 +54,7 @@ from inlay.nodes import (
 )
 from inlay.types import from_sql, to_sql
 
-_MISSING: Final = object()
+_MISSING = object()
 
 
 @dataclass(frozen=True, eq=False)
@@ -375,7 +375,7 @@ def _from_row(m: EntityMeta, row: Sequence[object]) -> Any:
 
 
 # Relative to the current directory, like any relative path.
-DEFAULT_PATH: Final = ".inlay-history.db"
+DEFAULT_PATH = ".inlay-history.db"
 
 
 def open(entities: Iterable[type], *, path: str | os.PathLike[str] = DEFAULT_PATH) -> Db:

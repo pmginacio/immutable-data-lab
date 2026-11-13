@@ -5,7 +5,7 @@ from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, S
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Any, Final, Self, overload
+from typing import Any, Self, overload
 from urllib.parse import quote
 
 from inlay.conditions import own_value
@@ -77,7 +77,7 @@ class BrokenRef(StoreError):
     pass
 
 
-_MISSING: Final = object()
+_MISSING = object()
 
 
 @dataclass(frozen=True, eq=False)
@@ -354,7 +354,7 @@ def _from_row(m: EntityMeta, row: Sequence[object]) -> Any:
 
 
 # Relative to the current directory, like any relative path.
-DEFAULT_PATH: Final = ".inlay.db"
+DEFAULT_PATH = ".inlay.db"
 
 
 def open(entities: Iterable[type], *, path: str | os.PathLike[str] = DEFAULT_PATH) -> Db:

@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from typing import Any, Final
+from typing import Any
 
 from inlay.functions import Aggregate
 from inlay.meta import EntityMeta, FieldMeta, meta
@@ -42,7 +42,7 @@ def quote(name: str) -> str:
 _TX_FROM = "tx_from"
 _TX_TO = "tx_to"
 # The `tx_to` of a version that is still current. A transaction never gets this number.
-CURRENT: Final = 2**63 - 1
+CURRENT = 2**63 - 1
 _IS_CURRENT = f"{quote(_TX_TO)} = {CURRENT}"
 
 # The table of transactions, with the number and the UTC time of each.
