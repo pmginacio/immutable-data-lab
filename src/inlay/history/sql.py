@@ -38,6 +38,8 @@ CURRENT: Final = 2**63 - 1
 TX_TABLE = 'CREATE TABLE "inlay_tx" ("tx" INTEGER PRIMARY KEY, "at" TEXT NOT NULL) STRICT'
 # The time of a transaction is never earlier than the one before, even when the clock goes back.
 NEXT_TX = 'INSERT INTO "inlay_tx" ("at") SELECT max(?, coalesce(max("at"), \'\')) FROM "inlay_tx" RETURNING "tx"'
+LATEST_TX = 'SELECT coalesce(max("tx"), 0) FROM "inlay_tx"'
+TX_AT = 'SELECT coalesce(max("tx"), 0) FROM "inlay_tx" WHERE "at" <= ?'
 # Every top-level transaction adds its row first and holds the write lock, so the largest number is its own.
 _TX = '(SELECT max("tx") FROM "inlay_tx")'
 
@@ -129,8 +131,11 @@ def _sql_op(op: CompareOp) -> str:
     return "=" if op == "==" else op
 
 
-def condition_sql(cond: Condition) -> tuple[str, list[object]]:
-    """The SQL for `cond`, and its parameters in order. `cond` was checked by `check_condition`."""
+def condition_sql(cond: Condition, tx: int | None = None) -> tuple[str, list[object]]:
+    """The SQL for `cond`, and its parameters in order. `cond` was checked by `check_condition`.
+
+    The records it reaches through relations are read at transaction `tx`, or the current ones if it is None.
+    """
     match cond:
         case Compare(left, op, right):
             left_sql, left_params = value_sql(left)
@@ -144,32 +149,32 @@ def condition_sql(cond: Condition) -> tuple[str, list[object]]:
         case Match(field, "contains", text):
             return f"instr({_column(field)}, ?) > 0", [text]
         case In(field, Filter() as records):
-            keys, params = _keys_sql(records)
+            keys, params = _keys_sql(records, tx)
             return f"{_column(field)} IN ({keys})", params
         case In(field, tuple() as values):
             marks = ", ".join("?" * len(values))
             return f"{_column(field)} IN ({marks})", [to_sql(v) for v in values]
         case And(items):
-            return _join(items, " AND ", "1")
+            return _join(items, " AND ", "1", tx)
         case Or(items):
-            return _join(items, " OR ", "0")
+            return _join(items, " OR ", "0", tx)
         case Not(item):
-            sql, params = condition_sql(item)
+            sql, params = condition_sql(item, tx)
             return f"NOT ({sql})", params
         case _:
             raise TypeError(f"expected a condition, got {cond!r}")
 
 
-def _join(items: Sequence[Condition], operator: str, empty: str) -> tuple[str, list[object]]:
-    parts = [condition_sql(item) for item in items]
+def _join(items: Sequence[Condition], operator: str, empty: str, tx: int | None) -> tuple[str, list[object]]:
+    parts = [condition_sql(item, tx) for item in items]
     if not parts:
         return empty, []
     return f"({operator.join(sql for sql, _ in parts)})", [p for _, params in parts for p in params]
 
 
-def _keys_sql(records: Filter) -> tuple[str, list[object]]:
-    """A SELECT of the keys of `records`, and its parameters."""
-    select = _select(records)
+def _keys_sql(records: Filter, tx: int | None) -> tuple[str, list[object]]:
+    """A SELECT of the keys of `records` at transaction `tx`, and its parameters."""
+    select = _select(records, tx)
     return _render(select, quote(select.m.key.name))
 
 
@@ -196,20 +201,27 @@ def _column(field: FieldMeta) -> str:
     return quote(field.name)
 
 
-def select_sql(query: Query) -> tuple[str, list[object]]:
-    """A SELECT of every column of the records `query` picks, and its parameters in order."""
-    select = _select(query)
+def select_sql(query: Query, tx: int | None = None) -> tuple[str, list[object]]:
+    """A SELECT of every column of the records `query` picks at transaction `tx`, and its parameters in order.
+
+    With no `tx`, it picks from the current records.
+    """
+    select = _select(query, tx)
     return _render(select, _columns(select.m))
 
 
 def aggregate_sql(
-    query: Query, aggregate: Aggregate[Any], value: Value | None = None, keys: tuple[Value, ...] = ()
+    query: Query,
+    aggregate: Aggregate[Any],
+    value: Value | None = None,
+    keys: tuple[Value, ...] = (),
+    tx: int | None = None,
 ) -> tuple[str, list[object]]:
-    """`aggregate` over the records `query` picks, of `value` if it takes one.
+    """`aggregate` over the records `query` picks at transaction `tx`, of `value` if it takes one.
 
     With `keys`, one row for each distinct key, sorted by key: the values of `keys`, then the aggregate.
     """
-    inner, inner_params = select_sql(query)
+    inner, inner_params = select_sql(query, tx)
     parts = [value_sql(k) for k in keys]
     value_part, value_params = ("", []) if value is None else value_sql(value)
     columns = [sql for sql, _ in parts] + [aggregate.sql.format(value_part)]
@@ -223,9 +235,13 @@ def aggregate_sql(
 
 @dataclass(frozen=True, slots=True)
 class _Select:
-    """The parts of one SELECT, which takes its records from `source`: a table, or a query in parentheses."""
+    """The parts of one SELECT, which takes its records from `source`: a table, or a query in parentheses.
+
+    `tx` is the transaction its records are read at, also through relations, or None for the current ones.
+    """
 
     m: EntityMeta
+    tx: int | None
     source: str
     source_params: tuple[object, ...] = ()
     where: tuple[Condition, ...] = ()
@@ -233,19 +249,22 @@ class _Select:
     slice: tuple[int, int | None] | None = None
 
 
-def _select(query: Query) -> _Select:
+def _select(query: Query, tx: int | None) -> _Select:
     match query:
         case Table(cls):
             m = meta(cls)
-            return _Select(m, f'(SELECT {_columns(m)} FROM {quote(m.table)} WHERE "tx_to" = {CURRENT})')
+            table = f"SELECT {_columns(m)} FROM {quote(m.table)}"
+            if tx is None:
+                return _Select(m, tx, f'({table} WHERE "tx_to" = {CURRENT})')
+            return _Select(m, tx, f'({table} WHERE "tx_from" <= ? AND ? < "tx_to")', (tx, tx))
         case Filter(source, cond):
-            select = _open(_select(source))
+            select = _open(_select(source, tx))
             return replace(select, where=(*select.where, cond))
         case Sort(source, keys, reverse):
-            select = _open(_select(source))
+            select = _open(_select(source, tx))
             return replace(select, order=tuple((k, reverse) for k in keys) + select.order)
         case Slice(source, start, stop):
-            return replace(_open(_select(source)), slice=(start, stop))
+            return replace(_open(_select(source, tx)), slice=(start, stop))
 
 
 def _open(select: _Select) -> _Select:
@@ -257,14 +276,15 @@ def _open(select: _Select) -> _Select:
         return select
     sql, params = _render(select, _columns(select.m))
     # SQL keeps no order from a subquery, so the outer SELECT sorts again.
-    return _Select(select.m, f"({sql})", tuple(params), order=select.order)
+    return _Select(select.m, select.tx, f"({sql})", tuple(params), order=select.order)
 
 
 def _render(select: _Select, columns: str) -> tuple[str, list[object]]:
     sql = f"SELECT {columns} FROM {select.source}"
     params = list(select.source_params)
     if select.where:
-        where, where_params = condition_sql(select.where[0] if len(select.where) == 1 else And(select.where))
+        cond = select.where[0] if len(select.where) == 1 else And(select.where)
+        where, where_params = condition_sql(cond, select.tx)
         sql += f" WHERE {where}"
         params += where_params
     if select.order:

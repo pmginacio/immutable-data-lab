@@ -16,12 +16,14 @@ from inlay.history.sql import (
     COMMIT,
     CONNECTION_SETUP,
     CURRENT,
+    LATEST_TX,
     LIST_TABLES,
     NEXT_TX,
     RELEASE,
     ROLLBACK,
     ROLLBACK_TO,
     SAVEPOINT,
+    TX_AT,
     TX_TABLE,
     aggregate_sql,
     clear_sql,
@@ -57,18 +59,22 @@ _MISSING: Final = object()
 
 @dataclass(frozen=True, slots=True, eq=False)
 class RecordView[T]:
-    """A lazy, read-only collection of records. Every read runs its query again."""
+    """A lazy, read-only collection of records. Every read runs its query again.
+
+    It reads the records as they were at transaction `_tx`, or the current ones if it is None.
+    """
 
     _conn: sqlite3.Connection
     _reading: Counter[type]
     _query: Query
+    _tx: int | None = None
 
     @property
     def _meta(self) -> EntityMeta:
         return meta(record_class(self._query))
 
     def __iter__(self) -> Iterator[T]:
-        sql, params = select_sql(self._query)
+        sql, params = select_sql(self._query, self._tx)
         classes = classes_read(self._query)
         # SQLite does not say what an open SELECT returns once its tables change, so writes to them are refused.
         self._reading.update(classes)
@@ -142,7 +148,7 @@ class RecordView[T]:
         many = isinstance(key, tuple)
         keys = tuple(own_value(self._meta.cls, k) for k in (key if many else (key,)))
         own = None if value is None else self._aggregated(aggregate, value)
-        sql, params = aggregate_sql(self._query, aggregate, own, keys)
+        sql, params = aggregate_sql(self._query, aggregate, own, keys, self._tx)
         rows = self._conn.execute(sql, params).fetchall()
         key_types = [result_type(k) for k in keys]
         value_type = aggregate.result or result_type(own)
@@ -171,10 +177,10 @@ class RecordView[T]:
         return default
 
     def _view(self, query: Query) -> "RecordView[T]":
-        return RecordView(self._conn, self._reading, query)
+        return RecordView(self._conn, self._reading, query, self._tx)
 
     def _aggregate(self, aggregate: Aggregate[Any], value: Value | None = None) -> Any:
-        sql, params = aggregate_sql(self._query, aggregate, value)
+        sql, params = aggregate_sql(self._query, aggregate, value, tx=self._tx)
         return self._conn.execute(sql, params).fetchone()[0]
 
 
@@ -198,6 +204,19 @@ class RecordSet[T](RecordView[T]):
             self._conn.execute(sql, params)
 
 
+@dataclass(frozen=True, slots=True, eq=False)
+class Snapshot:
+    """The db as it was at transaction `tx`: the same reads as the db, and no writes."""
+
+    _conn: sqlite3.Connection
+    _reading: Counter[type]  # shared with the db, which writes on the same connection
+    _metas: Mapping[type, EntityMeta]
+    tx: int
+
+    def __getitem__[T](self, cls: type[T]) -> RecordView[T]:
+        return RecordView(self._conn, self._reading, Table(_meta_in(self._metas, cls).cls), self.tx)
+
+
 class Db:
     def __init__(self, conn: sqlite3.Connection, metas: Mapping[type, EntityMeta]) -> None:
         self._conn = conn
@@ -205,7 +224,24 @@ class Db:
         self._reading: Counter[type] = Counter()
 
     def __getitem__[T](self, cls: type[T]) -> RecordSet[T]:
-        return RecordSet(self._conn, self._reading, Table(self._meta(cls).cls))
+        return RecordSet(self._conn, self._reading, Table(_meta_in(self._metas, cls).cls))
+
+    @property
+    def tx(self) -> int:
+        """The number of the latest transaction, or 0 before the first write."""
+        return self._conn.execute(LATEST_TX).fetchone()[0]
+
+    def as_of(self, at: int | datetime) -> Snapshot:
+        """The db as it was at transaction `at`, or at the last transaction at or before the time `at`."""
+        if isinstance(at, datetime):
+            if at.tzinfo is None:
+                raise ValueError("as_of needs a datetime with a timezone, because transaction times are in UTC")
+            tx = self._conn.execute(TX_AT, (to_sql(at),)).fetchone()[0]
+        elif not 0 <= at <= self.tx:
+            raise ValueError(f"there is no transaction {at}; the latest is {self.tx}")
+        else:
+            tx = at
+        return Snapshot(self._conn, self._reading, self._metas, tx)
 
     def transaction(self) -> AbstractContextManager[None]:
         return _transaction(self._conn)
@@ -247,15 +283,9 @@ class Db:
     ) -> None:
         self.close()
 
-    def _meta(self, cls: type) -> EntityMeta:
-        try:
-            return self._metas[cls]
-        except KeyError:
-            raise KeyError(f"{cls.__name__} was not passed to inlay.open") from None
-
     def _grouped(self, objs: Sequence[object]) -> list[tuple[EntityMeta, list[object]]]:
         classes = dict.fromkeys(type(o) for o in objs)
-        return [(self._meta(cls), [o for o in objs if type(o) is cls]) for cls in classes]
+        return [(_meta_in(self._metas, cls), [o for o in objs if type(o) is cls]) for cls in classes]
 
     def _write(self, sql_for: Callable[[EntityMeta], str], objs: Sequence[object]) -> None:
         groups = self._grouped(objs)
@@ -263,6 +293,13 @@ class Db:
         with _transaction(self._conn):
             for m, group in groups:
                 self._conn.executemany(sql_for(m), [_row(m, o) for o in group])
+
+
+def _meta_in(metas: Mapping[type, EntityMeta], cls: type) -> EntityMeta:
+    try:
+        return metas[cls]
+    except KeyError:
+        raise KeyError(f"{cls.__name__} was not passed to inlay.open") from None
 
 
 def _check_idle(reading: Counter[type], classes: Iterable[type]) -> None:
