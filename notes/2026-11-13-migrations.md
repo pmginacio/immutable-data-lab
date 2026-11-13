@@ -118,9 +118,9 @@ A backend may have to turn the constraints off while it swaps tables, but the us
 Later in the same discussion the design moved to explicit old classes and a standalone call, outside `open`.
 
 ```python
-inlay.migrate("shop.db", upgrade, A_legacy, A)    # case 1
-inlay.migrate("shop.db", upgrade, A_v1, A_v2)     # case 2
-inlay.rename("shop.db", "A", "B")                 # a pure rename, no shape change
+inlay.migrate(upgrade, A_legacy, A)    # case 1
+inlay.migrate(upgrade, A_v1, A_v2)     # case 2
+inlay.rename("A", "B")                 # a pure rename, no shape change
 ```
 
 A migration is a schema change of one class.
@@ -215,7 +215,7 @@ If a class were set up the first time `db[T]` uses it, as in the follow-up on no
 
 `db.py`:
 
-- `migrate(path, fn, old, new, other_entities=())` and `rename(path, old, new)`.
+- `migrate(fn, old, new, other_entities=(), *, path=".inlay.db")` and `rename(old, new, *, path=".inlay.db")`.
 - `_connect(path, create)`, shared with `open`, where `create=False` opens in read-write mode only.
 - `_repoint_referrers(conn, old, new)`, which finds the referrers, reads their indexes, runs `repoint_sql`, and recreates the indexes.
 - `_check_foreign_keys(conn)`, which runs `FOREIGN_KEY_CHECK` and raises `BrokenRef`.

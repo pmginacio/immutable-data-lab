@@ -167,9 +167,10 @@ class Order:
     total: int
 
 
-# Opens the file and creates the tables and indexes for these two classes if needed
+# Opens the file and creates the tables and indexes for these two classes if needed.
+# The file is .inlay.db in the current directory, or the one given with path="shop.db".
 # The db is closed at the end of the block, like a file.
-with inlay.open("shop.db", [Customer, Order]) as db:
+with inlay.open([Customer, Order]) as db:
     ana = Customer(name="Ana", city="Lisbon")
     bob = Customer(name="Bob", city="Porto")
     # One call can mix classes in the same transaction, and it is all or nothing.
@@ -274,7 +275,7 @@ class LineItem:
     price: int
     qty: int
 
-with inlay.open("shop.db", [Customer, Order, LineItem]) as db:    # the table "order" has the columns id, customer
+with inlay.open([Customer, Order, LineItem]) as db:    # the table "order" has the columns id, customer
     ...
 ```
 
@@ -300,10 +301,10 @@ def add_total_amount(db: Db) -> None:
         lines = db[LineItem].filter(LineItem.order == old.id)
         db.add(Order(id=old.id, customer=old.customer, total_amount=lines.sum(LineItem.price * LineItem.qty)))
 
-inlay.migrate("shop.db", add_total_amount, OrderLegacy, Order, other_entities=[LineItem])    # runs once, and does nothing after that
+inlay.migrate(add_total_amount, OrderLegacy, Order, other_entities=[LineItem])    # runs once, and does nothing after that
 # ---- end of migration ----
 
-with inlay.open("shop.db", [Customer, Order, LineItem]) as db:
+with inlay.open([Customer, Order, LineItem]) as db:
     ...
 ```
 
@@ -316,7 +317,7 @@ class Order:
     customer: Ref[Customer]
     total_amount: int
 
-with inlay.open("shop.db", [Customer, Order, LineItem]) as db:    # the table "order" has the columns id, customer, total_amount
+with inlay.open([Customer, Order, LineItem]) as db:    # the table "order" has the columns id, customer, total_amount
     ...
 ```
 
@@ -324,10 +325,11 @@ with inlay.open("shop.db", [Customer, Order, LineItem]) as db:    # the table "o
 Then it points the foreign keys of the other tables to the new table, drops the old one, and checks that the classes match their tables and that every reference points to a record.
 If the db already has the new table, nothing happens, so running it again is safe.
 The file must exist and hold the old table; otherwise `migrate` raises.
+Like `open`, `migrate` and `rename` use `.inlay.db` unless given another `path`.
 
-The new class can also have a name of its own: `inlay.migrate("shop.db", fn, Order, Purchase)` moves the data to a new table `purchase`, and the foreign keys of the other tables follow.
+The new class can also have a name of its own: `inlay.migrate(fn, Order, Purchase)` moves the data to a new table `purchase`, and the foreign keys of the other tables follow.
 The function gets a db with the old class, the new class, and the `other_entities`.
-To only rename a class, with no change to its fields, call `inlay.rename("shop.db", "Order", "Purchase")`: it renames the table, its indexes, and the references to it.
+To only rename a class, with no change to its fields, call `inlay.rename("Order", "Purchase")`: it renames the table, its indexes, and the references to it.
 A change that does not alter the schema is not a migration, just an ordinary write.
 
 ## Design
