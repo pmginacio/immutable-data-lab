@@ -223,7 +223,7 @@ class RecordSet[T](RecordView[T]):
 
 
 class Db:
-    def __init__(self, conn: sqlite3.Connection, metas: Mapping[type, EntityMeta]) -> None:
+    def __init__(self, conn: sqlite3.Connection, metas: frozendict[type, EntityMeta]) -> None:
         self._conn = conn
         self._metas = metas
         self._reading: Counter[type] = Counter()
@@ -333,7 +333,7 @@ DEFAULT_PATH: Final = ".inlay.db"
 
 
 def open(entities: Iterable[type], *, path: str | os.PathLike[str] = DEFAULT_PATH) -> Db:
-    metas = {m.cls: m for m in map(meta, entities)}
+    metas = _metas(entities)
     _check_refs(metas)
     conn = _connect(path, create=True)
     try:
@@ -391,7 +391,7 @@ def migrate(
     old_meta, new_meta = meta(old), meta(new)
     if old_meta.table == new_meta.table:
         raise ValueError(f"{old.__name__} and {new.__name__} use the same table; give the old class another name")
-    metas = {m.cls: m for m in map(meta, (old, new, *other_entities))}
+    metas = _metas((old, new, *other_entities))
     conn = _connect(path, create=False)
     try:
         _execute_all(conn, (*MIGRATION_SETUP, BEGIN))
@@ -449,6 +449,11 @@ def _connect(path: str | os.PathLike[str], *, create: bool) -> sqlite3.Connectio
 def _execute_all(conn: sqlite3.Connection, statements: Iterable[str]) -> None:
     for statement in statements:
         conn.execute(statement)
+
+
+def _metas(entities: Iterable[type]) -> frozendict[type, EntityMeta]:
+    # pyright's stub of frozendict declares an `__init__` with no arguments, although the constructor takes a mapping.
+    return frozendict({m.cls: m for m in map(meta, entities)})  # pyright: ignore[reportCallIssue]
 
 
 def _check_refs(metas: Mapping[type, EntityMeta]) -> None:

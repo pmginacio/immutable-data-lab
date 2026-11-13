@@ -210,7 +210,7 @@ class Snapshot:
 
     _conn: sqlite3.Connection
     _reading: Counter[type]  # shared with the db, which writes on the same connection
-    _metas: Mapping[type, EntityMeta]
+    _metas: frozendict[type, EntityMeta]
     tx: int
 
     def __getitem__[T](self, cls: type[T]) -> RecordView[T]:
@@ -218,7 +218,7 @@ class Snapshot:
 
 
 class Db:
-    def __init__(self, conn: sqlite3.Connection, metas: Mapping[type, EntityMeta]) -> None:
+    def __init__(self, conn: sqlite3.Connection, metas: frozendict[type, EntityMeta]) -> None:
         self._conn = conn
         self._metas = metas
         self._reading: Counter[type] = Counter()
@@ -366,7 +366,7 @@ DEFAULT_PATH: Final = ".inlay-history.db"
 
 
 def open(entities: Iterable[type], *, path: str | os.PathLike[str] = DEFAULT_PATH) -> Db:
-    metas = {m.cls: m for m in map(meta, entities)}
+    metas = _metas(entities)
     _check_refs(metas)
     conn = sqlite3.connect(path, autocommit=True)
     try:
@@ -387,6 +387,11 @@ def open(entities: Iterable[type], *, path: str | os.PathLike[str] = DEFAULT_PAT
 def _execute_all(conn: sqlite3.Connection, statements: Iterable[str]) -> None:
     for statement in statements:
         conn.execute(statement)
+
+
+def _metas(entities: Iterable[type]) -> frozendict[type, EntityMeta]:
+    # pyright's stub of frozendict declares an `__init__` with no arguments, although the constructor takes a mapping.
+    return frozendict({m.cls: m for m in map(meta, entities)})  # pyright: ignore[reportCallIssue]
 
 
 def _check_refs(metas: Mapping[type, EntityMeta]) -> None:
