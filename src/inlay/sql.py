@@ -47,7 +47,10 @@ def quote(name: str) -> str:
 
 
 def create_table_sql(m: EntityMeta, table: str | None = None) -> str:
-    """Written exactly the way SQLite stores it, so it can be compared with an existing table.
+    """The CREATE TABLE statement for `m`.
+
+    SQLite keeps this text, and `open` compares it with what this function returns now,
+    so any change to it, even in spacing, makes existing files fail the schema check.
 
     `table` is the name to use instead of the table of `m`, to compare a table with the shape of another class.
     References of `m` to itself use that name too, since they point to the same table.

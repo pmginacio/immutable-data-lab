@@ -64,7 +64,10 @@ _THIS_TX = f'(SELECT max("tx") FROM {quote(TX_TABLE)})'
 
 
 def create_table_sql(m: EntityMeta) -> str:
-    """Written exactly the way SQLite stores it, so it can be compared with an existing table.
+    """The CREATE TABLE statement for `m`.
+
+    SQLite keeps this text, and `open` compares it with what this function returns now,
+    so any change to it, even in spacing, makes existing files fail the schema check.
 
     Each row is one version of a record, current from transaction `tx_from` until `tx_to`.
     The `live_` columns hold the key and the references of current versions only, so SQLite checks them as in inlay.
