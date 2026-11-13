@@ -9,13 +9,13 @@ type CompareOp = Literal["==", "!=", "<", "<=", ">", ">="]
 type ArithmeticOp = Literal["+", "-", "*", "/"]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Call:
     fn: Function[Any, Any]
     arg: Value
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class BinOp:
     op: ArithmeticOp
     left: object  # a `Value`, or a number
@@ -25,18 +25,18 @@ class BinOp:
 type Value = FieldMeta | Call | BinOp
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Table:
     cls: type
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Filter:
     source: Query
     cond: Condition
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Sort:
     """`source` sorted by `keys`, like the built-in `sorted`: ties keep the order of `source`."""
 
@@ -45,7 +45,7 @@ class Sort:
     reverse: bool
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Slice:
     source: Query
     start: int
@@ -62,8 +62,6 @@ class Condition:
     so the functions that take conditions accept `Condition | bool`.
     """
 
-    __slots__ = ()
-
     def __and__(self, other: Condition | bool) -> And:
         return all_of(self, other)
 
@@ -77,21 +75,21 @@ class Condition:
         )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Compare(Condition):
     left: Value
     op: CompareOp
     right: object  # a plain value, or a `Value` of the same record
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Match(Condition):
     field: FieldMeta
     kind: Literal["startswith", "endswith", "contains"]
     text: str
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class In(Condition):
     """The field's value is one of `values`, or the key of one of the records in `values`."""
 
@@ -99,17 +97,17 @@ class In(Condition):
     values: tuple[object, ...] | Filter
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class And(Condition):
     items: tuple[Condition, ...]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Or(Condition):
     items: tuple[Condition, ...]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Not(Condition):
     item: Condition
 

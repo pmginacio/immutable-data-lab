@@ -80,7 +80,7 @@ class BrokenRef(StoreError):
 _MISSING: Final = object()
 
 
-@dataclass(frozen=True, slots=True, eq=False)
+@dataclass(frozen=True, eq=False)
 class RecordView[T]:
     """A lazy, read-only collection of records. Every read runs its query again."""
 
@@ -203,7 +203,6 @@ class RecordView[T]:
         return self._conn.execute(sql, params).fetchone()[0]
 
 
-@dataclass(frozen=True, slots=True, eq=False)
 class RecordSet[T](RecordView[T]):
     """All the records of one class. Unlike a view, it can also delete."""
 

@@ -58,7 +58,7 @@ from inlay.types import from_sql, to_sql
 _MISSING: Final = object()
 
 
-@dataclass(frozen=True, slots=True, eq=False)
+@dataclass(frozen=True, eq=False)
 class RecordView[T]:
     """A lazy, read-only collection of records. Every read runs its query again.
 
@@ -185,7 +185,6 @@ class RecordView[T]:
         return self._conn.execute(sql, params).fetchone()[0]
 
 
-@dataclass(frozen=True, slots=True, eq=False)
 class RecordSet[T](RecordView[T]):
     """All the records of one class. Unlike a view, it can also delete."""
 
@@ -205,7 +204,7 @@ class RecordSet[T](RecordView[T]):
             self._conn.execute(sql, params)
 
 
-@dataclass(frozen=True, slots=True, eq=False)
+@dataclass(frozen=True, eq=False)
 class Snapshot:
     """The db as it was at transaction `tx`: the same reads as the db, and no writes."""
 

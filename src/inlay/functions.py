@@ -13,7 +13,7 @@ class Applicable(Protocol):
     def _apply(self, fn: Function[Any, Any]) -> Any: ...
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Function[A, R]:
     """A function of one value: computed in Python on a plain value, and by the db on a field in a condition.
 
@@ -34,7 +34,7 @@ class Function[A, R]:
         raise TypeError(f"{self.name} needs a {self.arg.__name__}, got {x!r}")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Aggregate[R]:
     """A function of many values: computed in Python on an iterable, and by the db over the records of a view.
 

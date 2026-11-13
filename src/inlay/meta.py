@@ -3,7 +3,7 @@ from annotationlib import ForwardRef
 from dataclasses import dataclass
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class FieldMeta:
     owner: type
     name: str
@@ -18,7 +18,7 @@ class FieldMeta:
         return self.ref.evaluate() if isinstance(self.ref, ForwardRef) else self.ref
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class EntityMeta:
     cls: type
     table: str

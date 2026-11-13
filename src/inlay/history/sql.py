@@ -246,7 +246,7 @@ def aggregate_sql(
     return sql, [p for _, params in parts for p in params] + value_params + inner_params
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class _Select:
     """The parts of one SELECT, which takes its records from `source`: a table, or a query in parentheses.
 
