@@ -332,6 +332,27 @@ The function gets a db with the old class, the new class, and the `other_entitie
 To only rename a class, with no change to its fields, call `inlay.rename("Order", "Purchase")`: it renames the table, its indexes, and the references to it.
 A change that does not alter the schema is not a migration, just an ordinary write.
 
+### History, an experiment
+
+`inlay.history` is the same db, except that nothing is ever lost: it can be read as it was at any past transaction.
+
+```python
+import inlay.history
+
+with inlay.history.open([Customer, Order]) as db:    # the file is .inlay-history.db
+    db.add(ana, order)                                # writes and reads work as above
+    db.update(replace(order, total=0))
+
+    before = db.as_of(1)                              # a transaction number, or a datetime with a timezone
+    before[Order].filter(Order.total > 100)           # the same reads, as of that transaction
+    before.add(order)                                 # AttributeError: a snapshot cannot be written
+```
+
+An update or a removal ends the current version of a record and keeps it.
+SQLite still checks keys and references, so a current order must refer to a current customer.
+A class cannot be changed yet, so there is no `migrate` or `rename`.
+The design and its limits are in [`notes/2026-11-13-immutable-db.md`](notes/2026-11-13-immutable-db.md).
+
 ## Design
 
 **Records are values.**

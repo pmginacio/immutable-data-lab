@@ -2,7 +2,7 @@
 
 Notes from design discussions on 2026-11-13.
 These are the history experiments of `2026-11-13-roadmap.md`.
-The design of item 2 is settled for its first version, and no code has been written.
+The first version of item 2 is built, in `src/inlay/history/`, as designed below.
 
 The background is `2026-11-10-immutable-data-and-databases.md`, which describes Datomic and XTDB.
 
