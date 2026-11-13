@@ -246,21 +246,21 @@ class Db:
         return _transaction(self._conn)
 
     def add(self, *objs: object) -> None:
-        self._write(objs, _insert)
+        self._apply_by_entity(objs, _insert)
 
     def update(self, *objs: object) -> None:
         """Adds each record, or replaces the one with the same key, which stays in the history."""
         # The last record with each key wins, as if they were written one by one.
         latest = list({(type(o), getattr(o, meta(type(o)).key.name)): o for o in objs}.values())
         with self.transaction():
-            self._write(latest, _delete_by_key)
-            self._write(latest, _insert)
+            self._apply_by_entity(latest, _delete_by_key)
+            self._apply_by_entity(latest, _insert)
 
     def remove(self, *objs: object) -> None:
-        self._write(objs, _remove)
+        self._apply_by_entity(objs, _remove)
 
     def discard(self, *objs: object) -> None:
-        self._write(objs, _discard)
+        self._apply_by_entity(objs, _discard)
 
     def close(self) -> None:
         self._conn.close()
@@ -273,7 +273,7 @@ class Db:
     ) -> None:
         self.close()
 
-    def _write(self, objs: Sequence[object], write: _Write) -> None:
+    def _apply_by_entity(self, objs: Sequence[object], write: _Write) -> None:
         """Runs `write` on the records of each class, all in one transaction."""
         groups = _grouped(objs)
         _check_idle(self._reading, groups)

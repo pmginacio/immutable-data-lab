@@ -235,16 +235,16 @@ class Db:
         return _transaction(self._conn)
 
     def add(self, *objs: object) -> None:
-        self._write(objs, _insert)
+        self._apply_by_entity(objs, _insert)
 
     def update(self, *objs: object) -> None:
-        self._write(objs, _upsert)
+        self._apply_by_entity(objs, _upsert)
 
     def remove(self, *objs: object) -> None:
-        self._write(objs, _remove)
+        self._apply_by_entity(objs, _remove)
 
     def discard(self, *objs: object) -> None:
-        self._write(objs, _discard)
+        self._apply_by_entity(objs, _discard)
 
     def close(self) -> None:
         self._conn.close()
@@ -263,7 +263,7 @@ class Db:
         except KeyError:
             raise KeyError(f"{cls.__name__} was not passed to inlay.open") from None
 
-    def _write(self, objs: Sequence[object], write: _Write) -> None:
+    def _apply_by_entity(self, objs: Sequence[object], write: _Write) -> None:
         """Runs `write` on the records of each class, all in one transaction."""
         groups = _grouped(objs)
         _check_idle(self._reading, groups)
