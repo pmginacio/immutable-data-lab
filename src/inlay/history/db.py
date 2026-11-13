@@ -4,20 +4,25 @@ from collections import Counter
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from types import TracebackType
 from typing import Any, Final, Self, overload
 
 from inlay.conditions import own_value
+from inlay.db import AlreadyExists, BrokenRef, Missing, SchemaMismatch, StoreError
 from inlay.functions import Aggregate, aggregate_of
 from inlay.history.sql import (
     BEGIN,
     COMMIT,
     CONNECTION_SETUP,
+    CURRENT,
     LIST_TABLES,
+    NEXT_TX,
     RELEASE,
     ROLLBACK,
     ROLLBACK_TO,
     SAVEPOINT,
+    TX_TABLE,
     aggregate_sql,
     clear_sql,
     create_index_sql,
@@ -26,7 +31,7 @@ from inlay.history.sql import (
     delete_equal_sql,
     insert_sql,
     select_sql,
-    upsert_sql,
+    version_index_sqls,
 )
 from inlay.meta import EntityMeta, meta
 from inlay.nodes import (
@@ -46,27 +51,6 @@ from inlay.nodes import (
     result_type,
 )
 from inlay.types import from_sql, to_sql
-
-
-class StoreError(Exception):
-    pass
-
-
-class SchemaMismatch(StoreError):
-    pass
-
-
-class AlreadyExists(StoreError):
-    pass
-
-
-class Missing(StoreError):
-    pass
-
-
-class BrokenRef(StoreError):
-    pass
-
 
 _MISSING: Final = object()
 
@@ -230,7 +214,15 @@ class Db:
         self._write(insert_sql, objs)
 
     def update(self, *objs: object) -> None:
-        self._write(upsert_sql, objs)
+        """Ends the current version with each record's key, if there is one, and adds the record as the new one."""
+        groups = self._grouped(objs)
+        _check_idle(self._reading, [m.cls for m, _ in groups])
+        with _transaction(self._conn):
+            for m, group in groups:
+                # One record at a time, so the same key twice in a call ends with the last record.
+                for o in group:
+                    self._conn.execute(delete_by_key_sql(m), (to_sql(getattr(o, m.key.name)),))
+                    self._conn.execute(insert_sql(m), _row(m, o))
 
     def remove(self, *objs: object) -> None:
         groups = self._grouped(objs)
@@ -287,16 +279,28 @@ _NESTED = (SAVEPOINT, RELEASE, (ROLLBACK_TO, RELEASE))
 
 @contextmanager
 def _transaction(conn: sqlite3.Connection) -> Iterator[None]:
-    """Runs a new transaction, or a savepoint inside an open one, so a failed call leaves nothing behind."""
-    begin, end, undo = _NESTED if conn.in_transaction else _TOP_LEVEL
+    """Runs a new transaction, or a savepoint inside an open one, so a failed call leaves nothing behind.
+
+    A new transaction takes the next transaction number, which the writes inside it use.
+    """
+    nested = conn.in_transaction
+    begin, end, undo = _NESTED if nested else _TOP_LEVEL
     with _store_errors():
         conn.execute(begin)
         try:
+            if not nested:
+                _next_tx(conn)
             yield
             conn.execute(end)
         except BaseException:
             _execute_all(conn, undo)
             raise
+
+
+def _next_tx(conn: sqlite3.Connection) -> None:
+    (tx,) = conn.execute(NEXT_TX, (to_sql(datetime.now(UTC)),)).fetchone()
+    if tx >= CURRENT:
+        raise StoreError("the db has used every transaction number and cannot be written to")
 
 
 @contextmanager
@@ -305,7 +309,7 @@ def _store_errors() -> Iterator[None]:
         yield
     except sqlite3.IntegrityError as e:
         match e.sqlite_errorname:
-            case "SQLITE_CONSTRAINT_PRIMARYKEY":
+            case "SQLITE_CONSTRAINT_UNIQUE":
                 raise AlreadyExists(str(e)) from e
             case "SQLITE_CONSTRAINT_FOREIGNKEY":
                 raise BrokenRef("a Ref would point to a record that is not stored") from e
@@ -321,7 +325,7 @@ def _from_row(m: EntityMeta, row: Sequence[object]) -> Any:
 
 
 # Relative to the current directory, like any relative path.
-DEFAULT_PATH: Final = ".inlay.db"
+DEFAULT_PATH: Final = ".inlay-history.db"
 
 
 def open(entities: Iterable[type], *, path: str | os.PathLike[str] = DEFAULT_PATH) -> Db:
@@ -332,9 +336,11 @@ def open(entities: Iterable[type], *, path: str | os.PathLike[str] = DEFAULT_PAT
         _execute_all(conn, (*CONNECTION_SETUP, BEGIN))
         tables = dict(conn.execute(LIST_TABLES))
         _check_tables(metas.values(), tables)
+        create_tx = [TX_TABLE] if "inlay_tx" not in tables else []
         create_tables = [create_table_sql(m) for m in metas.values() if m.table not in tables]
         create_indexes = [create_index_sql(m, i) for m in metas.values() for i in m.indexes]
-        _execute_all(conn, (*create_tables, *create_indexes, COMMIT))
+        version_indexes = [sql for m in metas.values() for sql in version_index_sqls(m)]
+        _execute_all(conn, (*create_tx, *create_tables, *create_indexes, *version_indexes, COMMIT))
     except BaseException:
         conn.close()  # also rolls back the schema changes
         raise

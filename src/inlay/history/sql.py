@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, Final
 
 from inlay.functions import Aggregate
 from inlay.meta import EntityMeta, FieldMeta, meta
@@ -33,55 +33,96 @@ RELEASE = "RELEASE inlay"
 ROLLBACK_TO = "ROLLBACK TO inlay"
 LIST_TABLES = "SELECT name, sql FROM sqlite_master WHERE type = 'table'"
 
+# The `tx_to` of a version that is still current. A transaction never gets this number.
+CURRENT: Final = 2**63 - 1
+TX_TABLE = 'CREATE TABLE "inlay_tx" ("tx" INTEGER PRIMARY KEY, "at" TEXT NOT NULL) STRICT'
+# The time of a transaction is never earlier than the one before, even when the clock goes back.
+NEXT_TX = 'INSERT INTO "inlay_tx" ("at") SELECT max(?, coalesce(max("at"), \'\')) FROM "inlay_tx" RETURNING "tx"'
+# Every top-level transaction adds its row first and holds the write lock, so the largest number is its own.
+_TX = '(SELECT max("tx") FROM "inlay_tx")'
+
 
 def quote(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
 def create_table_sql(m: EntityMeta) -> str:
-    """Written exactly the way SQLite stores it, so it can be compared with an existing table."""
-    return f"CREATE TABLE {quote(m.table)} ({', '.join(map(_column_def, m.fields))}) STRICT"
+    """Written exactly the way SQLite stores it, so it can be compared with an existing table.
+
+    Each row is one version of a record, current from transaction `tx_from` until `tx_to`.
+    The `live_` columns hold the key and the references of current versions only, so SQLite checks them as in inlay.
+    """
+    live = [_live_def(f) for f in m.fields if f.is_key or f.target is not None]
+    columns = [*map(_column_def, m.fields), '"tx_from" INTEGER NOT NULL', '"tx_to" INTEGER NOT NULL', *live]
+    return f"CREATE TABLE {quote(m.table)} ({', '.join(columns)}) STRICT"
 
 
 def create_index_sql(m: EntityMeta, index: tuple[FieldMeta, ...]) -> str:
+    """A declared index, after `tx_to`, so that reading the current versions is an exact match on its first column."""
     name = "__".join((m.table, *(f.name for f in index)))
     columns = ", ".join(quote(f.name) for f in index)
-    return f"CREATE INDEX IF NOT EXISTS {quote(name)} ON {quote(m.table)} ({columns})"
+    return f'CREATE INDEX IF NOT EXISTS {quote(name)} ON {quote(m.table)} ("tx_to", {columns})'
+
+
+def version_index_sqls(m: EntityMeta) -> list[str]:
+    """The indexes every class needs: to read all of it, to read the versions of a record, and to check references.
+
+    SQLite needs an index that starts with the column of a foreign key, or a removal scans the referring table.
+    """
+    table = quote(m.table)
+    columns = [("tx_to", "tx_from"), (m.key.name, "tx_from")]
+    columns += [(_live(f),) for f in m.fields if f.target is not None]
+    return [
+        f"CREATE INDEX IF NOT EXISTS {quote('__'.join((m.table, *c)))} ON {table} ({', '.join(map(quote, c))})"
+        for c in columns
+    ]
 
 
 def _column_def(f: FieldMeta) -> str:
-    sql = f"{quote(f.name)} {SQL_TYPES[f.py_type]} NOT NULL"
-    if f.is_key:
-        sql += " PRIMARY KEY"
-    if f.target is not None:
-        target = meta(f.target)
-        # Checked at commit, so the order of writes inside a transaction does not matter.
-        sql += f" REFERENCES {quote(target.table)} ({quote(target.key.name)}) DEFERRABLE INITIALLY DEFERRED"
-    return sql
+    return f"{quote(f.name)} {SQL_TYPES[f.py_type]} NOT NULL"
+
+
+def _live_def(f: FieldMeta) -> str:
+    """The column that holds `f` on the current version and NULL on the others, which SQLite leaves unchecked."""
+    sql = (
+        f"{quote(_live(f))} {SQL_TYPES[f.py_type]} GENERATED ALWAYS AS "
+        f'(CASE WHEN "tx_to" = {CURRENT} THEN {quote(f.name)} END) VIRTUAL'
+    )
+    if f.target is None:  # the key
+        return sql + " UNIQUE"
+    target = meta(f.target)
+    # Checked at commit, so the order of writes inside a transaction does not matter.
+    return sql + f" REFERENCES {quote(target.table)} ({quote(_live(target.key))}) DEFERRABLE INITIALLY DEFERRED"
+
+
+def _live(f: FieldMeta) -> str:
+    return f"live_{f.name}"
 
 
 def insert_sql(m: EntityMeta) -> str:
-    return f"INSERT INTO {quote(m.table)} ({_columns(m)}) VALUES ({', '.join('?' * len(m.fields))})"
-
-
-def upsert_sql(m: EntityMeta) -> str:
-    updates = ", ".join(f"{quote(f.name)} = excluded.{quote(f.name)}" for f in m.fields if not f.is_key)
-    action = f"DO UPDATE SET {updates}" if updates else "DO NOTHING"
-    return f"{insert_sql(m)} ON CONFLICT ({quote(m.key.name)}) {action}"
+    """Adds a version that is current from this transaction on."""
+    marks = ", ".join("?" * len(m.fields))
+    return f'INSERT INTO {quote(m.table)} ({_columns(m)}, "tx_from", "tx_to") VALUES ({marks}, {_TX}, {CURRENT})'
 
 
 def delete_by_key_sql(m: EntityMeta) -> str:
-    return f"DELETE FROM {quote(m.table)} WHERE {quote(m.key.name)} = ?"
+    """Ends the current version with a key at this transaction. Nothing is deleted."""
+    return _close_sql(m, f"{quote(m.key.name)} = ?")
 
 
 def delete_equal_sql(m: EntityMeta) -> str:
-    return f"DELETE FROM {quote(m.table)} WHERE {' AND '.join(f'{quote(f.name)} = ?' for f in m.fields)}"
+    """Ends the current version equal to a record at this transaction. Nothing is deleted."""
+    return _close_sql(m, " AND ".join(f"{quote(f.name)} = ?" for f in m.fields))
 
 
 def clear_sql(m: EntityMeta, cond: Condition) -> tuple[str, list[object]]:
-    """A DELETE of every record that matches `cond`, and its parameters."""
+    """Ends every current version that matches `cond` at this transaction, and its parameters."""
     where, params = condition_sql(cond)
-    return f"DELETE FROM {quote(m.table)} WHERE {where}", params
+    return _close_sql(m, where), params
+
+
+def _close_sql(m: EntityMeta, where: str) -> str:
+    return f'UPDATE {quote(m.table)} SET "tx_to" = {_TX} WHERE "tx_to" = {CURRENT} AND {where}'
 
 
 def _sql_op(op: CompareOp) -> str:
@@ -196,7 +237,7 @@ def _select(query: Query) -> _Select:
     match query:
         case Table(cls):
             m = meta(cls)
-            return _Select(m, quote(m.table))
+            return _Select(m, f'(SELECT {_columns(m)} FROM {quote(m.table)} WHERE "tx_to" = {CURRENT})')
         case Filter(source, cond):
             select = _open(_select(source))
             return replace(select, where=(*select.where, cond))
