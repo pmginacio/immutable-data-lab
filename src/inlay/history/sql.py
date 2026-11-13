@@ -33,19 +33,30 @@ RELEASE = "RELEASE inlay"
 ROLLBACK_TO = "ROLLBACK TO inlay"
 LIST_TABLES = "SELECT name, sql FROM sqlite_master WHERE type = 'table'"
 
-# The `tx_to` of a version that is still current. A transaction never gets this number.
-CURRENT: Final = 2**63 - 1
-TX_TABLE = 'CREATE TABLE "inlay_tx" ("tx" INTEGER PRIMARY KEY, "at" TEXT NOT NULL) STRICT'
-# The time of a transaction is never earlier than the one before, even when the clock goes back.
-NEXT_TX = 'INSERT INTO "inlay_tx" ("at") SELECT max(?, coalesce(max("at"), \'\')) FROM "inlay_tx" RETURNING "tx"'
-LATEST_TX = 'SELECT coalesce(max("tx"), 0) FROM "inlay_tx"'
-TX_AT = 'SELECT coalesce(max("tx"), 0) FROM "inlay_tx" WHERE "at" <= ?'
-# Every top-level transaction adds its row first and holds the write lock, so the largest number is its own.
-_TX = '(SELECT max("tx") FROM "inlay_tx")'
-
 
 def quote(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
+
+
+# The columns that every table of versions has: the transaction where a version starts, and where it ends.
+_TX_FROM = "tx_from"
+_TX_TO = "tx_to"
+# The `tx_to` of a version that is still current. A transaction never gets this number.
+CURRENT: Final = 2**63 - 1
+_IS_CURRENT = f"{quote(_TX_TO)} = {CURRENT}"
+
+# The table of transactions, with the number and the time of each.
+TX_TABLE = "inlay_tx"
+CREATE_TX_TABLE = f'CREATE TABLE {quote(TX_TABLE)} ("tx" INTEGER PRIMARY KEY, "at" TEXT NOT NULL) STRICT'
+# The time of a transaction is never earlier than the one before, even when the clock goes back.
+NEXT_TX = (
+    f'INSERT INTO {quote(TX_TABLE)} ("at") SELECT max(?, coalesce(max("at"), \'\')) FROM {quote(TX_TABLE)} '
+    'RETURNING "tx"'
+)
+LATEST_TX = f'SELECT coalesce(max("tx"), 0) FROM {quote(TX_TABLE)}'
+TX_AT = f'{LATEST_TX} WHERE "at" <= ?'
+# Every top-level transaction adds its row first and holds the write lock, so the largest number is its own.
+_THIS_TX = f'(SELECT max("tx") FROM {quote(TX_TABLE)})'
 
 
 def create_table_sql(m: EntityMeta) -> str:
@@ -54,8 +65,9 @@ def create_table_sql(m: EntityMeta) -> str:
     Each row is one version of a record, current from transaction `tx_from` until `tx_to`.
     The `live_` columns hold the key and the references of current versions only, so SQLite checks them as in inlay.
     """
+    tx_columns = [f"{quote(name)} INTEGER NOT NULL" for name in (_TX_FROM, _TX_TO)]
     live = [_live_def(f) for f in m.fields if f.is_key or f.target is not None]
-    columns = [*map(_column_def, m.fields), '"tx_from" INTEGER NOT NULL', '"tx_to" INTEGER NOT NULL', *live]
+    columns = [*map(_column_def, m.fields), *tx_columns, *live]
     return f"CREATE TABLE {quote(m.table)} ({', '.join(columns)}) STRICT"
 
 
@@ -63,7 +75,7 @@ def create_index_sql(m: EntityMeta, index: tuple[FieldMeta, ...]) -> str:
     """A declared index, after `tx_to`, so that reading the current versions is an exact match on its first column."""
     name = "__".join((m.table, *(f.name for f in index)))
     columns = ", ".join(quote(f.name) for f in index)
-    return f'CREATE INDEX IF NOT EXISTS {quote(name)} ON {quote(m.table)} ("tx_to", {columns})'
+    return f"CREATE INDEX IF NOT EXISTS {quote(name)} ON {quote(m.table)} ({quote(_TX_TO)}, {columns})"
 
 
 def version_index_sqls(m: EntityMeta) -> list[str]:
@@ -72,7 +84,7 @@ def version_index_sqls(m: EntityMeta) -> list[str]:
     SQLite needs an index that starts with the column of a foreign key, or a removal scans the referring table.
     """
     table = quote(m.table)
-    columns = [("tx_to", "tx_from"), (m.key.name, "tx_from")]
+    columns = [(_TX_TO, _TX_FROM), (m.key.name, _TX_FROM)]
     columns += [(_live(f),) for f in m.fields if f.target is not None]
     return [
         f"CREATE INDEX IF NOT EXISTS {quote('__'.join((m.table, *c)))} ON {table} ({', '.join(map(quote, c))})"
@@ -88,7 +100,7 @@ def _live_def(f: FieldMeta) -> str:
     """The column that holds `f` on the current version and NULL on the others, which SQLite leaves unchecked."""
     sql = (
         f"{quote(_live(f))} {SQL_TYPES[f.py_type]} GENERATED ALWAYS AS "
-        f'(CASE WHEN "tx_to" = {CURRENT} THEN {quote(f.name)} END) VIRTUAL'
+        f"(CASE WHEN {_IS_CURRENT} THEN {quote(f.name)} END) VIRTUAL"
     )
     if f.target is None:  # the key
         return sql + " UNIQUE"
@@ -104,7 +116,8 @@ def _live(f: FieldMeta) -> str:
 def insert_sql(m: EntityMeta) -> str:
     """Adds a version that is current from this transaction on."""
     marks = ", ".join("?" * len(m.fields))
-    return f'INSERT INTO {quote(m.table)} ({_columns(m)}, "tx_from", "tx_to") VALUES ({marks}, {_TX}, {CURRENT})'
+    tx_columns = f"{quote(_TX_FROM)}, {quote(_TX_TO)}"
+    return f"INSERT INTO {quote(m.table)} ({_columns(m)}, {tx_columns}) VALUES ({marks}, {_THIS_TX}, {CURRENT})"
 
 
 def delete_by_key_sql(m: EntityMeta) -> str:
@@ -124,7 +137,7 @@ def clear_sql(m: EntityMeta, cond: Condition) -> tuple[str, list[object]]:
 
 
 def _close_sql(m: EntityMeta, where: str) -> str:
-    return f'UPDATE {quote(m.table)} SET "tx_to" = {_TX} WHERE "tx_to" = {CURRENT} AND {where}'
+    return f"UPDATE {quote(m.table)} SET {quote(_TX_TO)} = {_THIS_TX} WHERE {_IS_CURRENT} AND {where}"
 
 
 def _sql_op(op: CompareOp) -> str:
@@ -255,8 +268,9 @@ def _select(query: Query, tx: int | None) -> _Select:
             m = meta(cls)
             table = f"SELECT {_columns(m)} FROM {quote(m.table)}"
             if tx is None:
-                return _Select(m, tx, f'({table} WHERE "tx_to" = {CURRENT})')
-            return _Select(m, tx, f'({table} WHERE "tx_from" <= ? AND ? < "tx_to")', (tx, tx))
+                return _Select(m, tx, f"({table} WHERE {_IS_CURRENT})")
+            at_tx = f"{quote(_TX_FROM)} <= ? AND ? < {quote(_TX_TO)}"
+            return _Select(m, tx, f"({table} WHERE {at_tx})", (tx, tx))
         case Filter(source, cond):
             select = _open(_select(source, tx))
             return replace(select, where=(*select.where, cond))

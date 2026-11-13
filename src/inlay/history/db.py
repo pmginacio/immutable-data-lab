@@ -15,6 +15,7 @@ from inlay.history.sql import (
     BEGIN,
     COMMIT,
     CONNECTION_SETUP,
+    CREATE_TX_TABLE,
     CURRENT,
     LATEST_TX,
     LIST_TABLES,
@@ -373,7 +374,7 @@ def open(entities: Iterable[type], *, path: str | os.PathLike[str] = DEFAULT_PAT
         _execute_all(conn, (*CONNECTION_SETUP, BEGIN))
         tables = dict(conn.execute(LIST_TABLES))
         _check_tables(metas.values(), tables)
-        create_tx = [TX_TABLE] if "inlay_tx" not in tables else []
+        create_tx = [CREATE_TX_TABLE] if TX_TABLE not in tables else []
         create_tables = [create_table_sql(m) for m in metas.values() if m.table not in tables]
         create_indexes = [create_index_sql(m, i) for m in metas.values() for i in m.indexes]
         version_indexes = [sql for m in metas.values() for sql in version_index_sqls(m)]
