@@ -1,6 +1,6 @@
 import os
 import sqlite3
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
@@ -190,7 +190,7 @@ class RecordSet[T](RecordView[T]):
     def delete(self, *keys: str) -> None:
         _check_idle(self._reading, [self._meta.cls])
         with _transaction(self._conn):
-            deleted = self._conn.executemany(delete_by_key_sql(self._meta), [(k,) for k in keys]).rowcount
+            deleted = self._conn.executemany(delete_by_key_sql(self._meta), ((k,) for k in keys)).rowcount
             if deleted != len(keys):
                 raise Missing(f"{len(keys) - deleted} of the {self._meta.cls.__name__} keys are not stored")
 
@@ -254,17 +254,18 @@ class Db:
         _check_idle(self._reading, [m.cls for m, _ in groups])
         with _transaction(self._conn):
             for m, group in groups:
+                close, insert = delete_by_key_sql(m), insert_sql(m)
                 # One record at a time, so the same key twice in a call ends with the last record.
                 for o in group:
-                    self._conn.execute(delete_by_key_sql(m), (to_sql(getattr(o, m.key.name)),))
-                    self._conn.execute(insert_sql(m), _row(m, o))
+                    self._conn.execute(close, (to_sql(getattr(o, m.key.name)),))
+                    self._conn.execute(insert, _row(m, o))
 
     def remove(self, *objs: object) -> None:
         groups = self._grouped(objs)
         _check_idle(self._reading, [m.cls for m, _ in groups])
         with _transaction(self._conn):
             for m, group in groups:
-                deleted = self._conn.executemany(delete_equal_sql(m), [_row(m, o) for o in group]).rowcount
+                deleted = self._conn.executemany(delete_equal_sql(m), (_row(m, o) for o in group)).rowcount
                 if deleted != len(group):
                     raise Missing(f"{len(group) - deleted} of the {m.cls.__name__} records are not stored")
 
@@ -283,15 +284,18 @@ class Db:
         self.close()
 
     def _grouped(self, objs: Sequence[object]) -> list[tuple[EntityMeta, list[object]]]:
-        classes = dict.fromkeys(type(o) for o in objs)
-        return [(_meta_in(self._metas, cls), [o for o in objs if type(o) is cls]) for cls in classes]
+        """The records of each class, so each class is written with one statement, in the order classes appear."""
+        groups: defaultdict[type, list[object]] = defaultdict(list)
+        for o in objs:
+            groups[type(o)].append(o)
+        return [(_meta_in(self._metas, cls), group) for cls, group in groups.items()]
 
     def _write(self, sql_for: Callable[[EntityMeta], str], objs: Sequence[object]) -> None:
         groups = self._grouped(objs)
         _check_idle(self._reading, [m.cls for m, _ in groups])
         with _transaction(self._conn):
             for m, group in groups:
-                self._conn.executemany(sql_for(m), [_row(m, o) for o in group])
+                self._conn.executemany(sql_for(m), (_row(m, o) for o in group))
 
 
 def _meta_in(metas: Mapping[type, EntityMeta], cls: type) -> EntityMeta:
