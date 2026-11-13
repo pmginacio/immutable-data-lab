@@ -321,7 +321,8 @@ This is version one, and the limits are on purpose.
 
 - SQLite only.
 - A `Db` works only in the thread and process that opened it: open one in each.
-- Several processes creating the same new db file at once can fail: create it once first.- No optional fields, enums or composite keys.
+- Several processes creating the same new db file at once can fail: create it once first.
+- No optional fields, enums or composite keys.
 - No cascading deletes, reverse relations, or migrations.
 - Few functions so far: arithmetic, `to_month` and `to_day`.
 - Slices that skip many records are slow, because SQLite reads and discards the skipped rows.
@@ -341,4 +342,5 @@ uv run python examples/shop.py     # the example app
 
 - [`notes/2026-11-10-design-v1.md`](notes/2026-11-10-design-v1.md) is the full design of inlay, with the reasons for each choice, and its follow-ups.
 - [`notes/2026-11-11-sales-example-learnings.md`](notes/2026-11-11-sales-example-learnings.md) is what writing the sales example taught us about inlay, and the ideas it suggests.
+- [`notes/2026-11-13-migrations.md`](notes/2026-11-13-migrations.md) is an open design discussion on migrations and renaming classes.
 - [`notes/2026-11-10-immutable-data-and-databases.md`](notes/2026-11-10-immutable-data-and-databases.md) is the background: immutable data, FP style, and database design in Python.
