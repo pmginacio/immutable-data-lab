@@ -23,13 +23,6 @@ class Order:
     total: int
 
 
-@entity(table="lines", indexes=[("order",)])
-class OrderLine:
-    id: str = key()
-    order: Ref[Order]
-    qty: int
-
-
 @entity(indexes=[("parent",)])
 class Category:
     id: str = key()
@@ -91,7 +84,6 @@ def test_meta():
     assert total == FieldMeta(Order, "total", int)
     assert (m.cls, m.table, m.key, m.indexes) == (Order, "order", id_, ((customer,), (total,)))
     assert customer.target is Customer
-    assert meta(OrderLine).table == "lines"
 
 
 def test_forward_ref_target_resolves_later():

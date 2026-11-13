@@ -13,18 +13,31 @@ class Customer:
     name: str
 
 
-# The classes as they were when the file was written.
-@entity(table="order", indexes=[("customer",)])
-class OldOrder:
-    id: str = key()
-    customer: Ref[Customer]
-    total: int
+def order_line(order_class: type) -> type:
+    """The class of the table order_line, with its references pointing to `order_class`."""
+
+    @entity(indexes=[("order",)])
+    class OrderLine:
+        id: str = key()
+        order: Ref[order_class]
+
+    return OrderLine
 
 
-@entity(table="order_line", indexes=[("order",)])
-class OldLine:
-    id: str = key()
-    order: Ref[OldOrder]
+def old_order() -> type:
+    """The class of the table order as it was when the file was written."""
+
+    @entity(indexes=[("customer",)])
+    class Order:
+        id: str = key()
+        customer: Ref[Customer]
+        total: int
+
+    return Order
+
+
+OldOrder = old_order()
+OldLine = order_line(OldOrder)
 
 
 # Case 1: the old shape under another name, and the new class with the old name.
@@ -43,10 +56,7 @@ class Order:
     discount: int
 
 
-@entity(table="order_line", indexes=[("order",)])
-class OrderLine:
-    id: str = key()
-    order: Ref[Order]
+OrderLine = order_line(Order)
 
 
 # Case 2: the new class has a table name of its own.
@@ -58,10 +68,7 @@ class Purchase:
     discount: int
 
 
-@entity(table="order_line", indexes=[("order",)])
-class PurchaseLine:
-    id: str = key()
-    order: Ref[Purchase]
+PurchaseLine = order_line(Purchase)
 
 
 @entity(indexes=[("customer",)])
@@ -71,10 +78,7 @@ class Booking:
     total: int
 
 
-@entity(table="order_line", indexes=[("order",)])
-class BookingLine:
-    id: str = key()
-    order: Ref[Booking]
+BookingLine = order_line(Booking)
 
 
 @pytest.fixture
@@ -183,5 +187,5 @@ def test_a_db_without_the_old_table_is_refused(tmp_path):
     path = tmp_path / "other.db"
     with inlay.open(path, [Customer]):
         pass
-    with pytest.raises(SchemaMismatch, match="cannot migrate OldOrder to Purchase"):
+    with pytest.raises(SchemaMismatch, match="cannot migrate Order to Purchase"):
         inlay.migrate(path, add_discount_to_purchase, OldOrder, Purchase)

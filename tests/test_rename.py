@@ -26,16 +26,19 @@ class Purchase:
     total: int
 
 
-@entity(table="order_line", indexes=[("order",)])
-class OrderLine:
-    id: str = key()
-    order: Ref[Order]
+def order_line(order_class: type) -> type:
+    """The class of the table order_line, with its references pointing to `order_class`."""
+
+    @entity(indexes=[("order",)])
+    class OrderLine:
+        id: str = key()
+        order: Ref[order_class]
+
+    return OrderLine
 
 
-@entity(table="order_line", indexes=[("order",)])
-class PurchaseLine:
-    id: str = key()
-    order: Ref[Purchase]
+OrderLine = order_line(Order)
+PurchaseLine = order_line(Purchase)
 
 
 @pytest.fixture

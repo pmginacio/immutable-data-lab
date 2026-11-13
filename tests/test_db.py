@@ -68,13 +68,10 @@ def test_changed_class_raises_and_changes_nothing(tmp_path):
     path = tmp_path / "shop.db"
     inlay.open(path, [Customer]).close()
 
-    @entity(table="customer")
-    class RenamedField:
-        id: str = key()
-        full_name: str
+    renamed_field = entity(type("Customer", (), {"__annotations__": {"id": str, "full_name": str}, "id": key()}))
 
     with pytest.raises(SchemaMismatch, match="table 'customer' does not match its entity"):
-        inlay.open(path, [Category, RenamedField])
+        inlay.open(path, [Category, renamed_field])
     assert "category" not in schema(path)
 
 

@@ -54,35 +54,31 @@ class _Field:
 @overload
 def entity[C](cls: type[C], /) -> type[C]: ...
 @overload
-def entity[C](
-    *, table: str | None = None, indexes: Sequence[tuple[str, ...]] = ()
-) -> Callable[[type[C]], type[C]]: ...
+def entity[C](*, indexes: Sequence[tuple[str, ...]] = ()) -> Callable[[type[C]], type[C]]: ...
 @dataclass_transform(frozen_default=True, kw_only_default=True)
-def entity(
-    cls: type | None = None, /, *, table: str | None = None, indexes: Sequence[tuple[str, ...]] = ()
-) -> Any:
+def entity(cls: type | None = None, /, *, indexes: Sequence[tuple[str, ...]] = ()) -> Any:
     def wrap(c: type) -> type:
-        return _make_entity(c, table or table_name(c.__name__), tuple(tuple(i) for i in indexes))
+        return _make_entity(c, tuple(tuple(i) for i in indexes))
 
     return wrap if cls is None else wrap(cls)
 
 
-def _make_entity(cls: type, table: str, indexes: tuple[tuple[str, ...], ...]) -> type:
+def _make_entity(cls: type, indexes: tuple[tuple[str, ...], ...]) -> type:
     new = dataclass(frozen=True, slots=True, kw_only=True)(cls)
-    m = _entity_meta(new, table, indexes)
+    m = _entity_meta(new, indexes)
     setattr(new, "__inlay__", m)
     for f in m.fields:
         setattr(new, f.name, _Field(new.__dict__[f.name], f))
     return new
 
 
-def _entity_meta(cls: type, table: str, indexes: tuple[tuple[str, ...], ...]) -> EntityMeta:
+def _entity_meta(cls: type, indexes: tuple[tuple[str, ...], ...]) -> EntityMeta:
     # FORWARDREF leaves names that do not exist yet, such as the class itself, as forward references.
     hints = get_annotations(cls, format=Format.FORWARDREF)
     field_metas = tuple(_field_meta(cls, f, hints[f.name]) for f in fields(cls))
     _check(cls.__name__, field_metas, indexes)
     by_name = {f.name: f for f in field_metas}
-    return EntityMeta(cls, table, field_metas, tuple(tuple(by_name[name] for name in index) for index in indexes))
+    return EntityMeta(cls, table_name(cls.__name__), field_metas,tuple(tuple(by_name[name] for name in index) for index in indexes))
 
 
 def _field_meta(owner: type, f: Field[Any], hint: Any) -> FieldMeta:

@@ -10,19 +10,25 @@ class Customer:
     name: str
 
 
-# The classes as they were when the file was written.
-@entity(table="order", indexes=[("customer",)])
-class OrderBefore:
-    id: str = key()
-    customer: Ref[Customer]
+def before() -> tuple[type, type]:
+    """The classes as they were when the file was written."""
+
+    @entity(indexes=[("customer",)])
+    class Order:
+        id: str = key()
+        customer: Ref[Customer]
+
+    @entity(indexes=[("order",)])
+    class LineItem:
+        id: str = key()
+        order: Ref[Order]
+        price: int
+        qty: int
+
+    return Order, LineItem
 
 
-@entity(table="line_item", indexes=[("order",)])
-class LineItemBefore:
-    id: str = key()
-    order: Ref[OrderBefore]
-    price: int
-    qty: int
+OrderBefore, LineItemBefore = before()
 
 
 @entity(indexes=[("customer",)])

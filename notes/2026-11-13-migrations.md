@@ -74,7 +74,7 @@ In SQLite this is `ALTER TABLE ... RENAME`, which changes only the schema and al
 The second was preferred.
 The catalog does not remove the need to declare the rename, so it adds a lookup without saving the user anything.
 After a few renames a catalog would leave `Purchase` in table `order` and a new `Order` in `order_2`, which is confusing in a SQLite shell.
-The `table=` parameter of `@entity` could then go, leaving one way to name a table.
+The `table=` parameter of `@entity` was removed, leaving one way to name a table, so `rename` can find a table from a class name.
 
 A catalog may still be useful later for other reasons: storing each class's shape for `db.previous`, and recording which migrations have run.
 It can be keyed by class name, since that is also the table name.
