@@ -164,7 +164,8 @@ Everything after that step is shared.
 11. Commit. If anything raises, roll back everything and re-raise.
 
 The connection belongs to `migrate` and is closed at the end, so the pragmas never leak.
-Calling it at every startup is safe, and two processes queue on the write lock.
+Calling it again after it has run is safe, and two processes queue on the write lock.
+It raises when the file does not exist or does not hold the old table, so it is not meant for a new file.
 
 ### References
 
@@ -184,7 +185,9 @@ It takes no class, because the old class is gone from the code.
 It runs in one transaction with foreign keys on, so SQLite itself rewrites the `REFERENCES` in the other tables.
 SQLite cannot rename an index, so it drops and recreates the table's indexes under the new prefix.
 It is not idempotent: it raises `SchemaMismatch` if the old table does not exist or the new one already does.
-A wrong rename also shows up as `SchemaMismatch` at the next `open` or `migrate`.
+A wrong rename shows up as `SchemaMismatch` at the next `open` only when another table refers to the renamed one.
+Otherwise, as with a forgotten rename, `open` creates an empty table for the class and says nothing.
+A strict `open` that refuses tables no class claims would catch it, and was judged too restrictive.
 
 ### `other_entities`
 

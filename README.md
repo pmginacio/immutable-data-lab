@@ -322,7 +322,8 @@ with inlay.open("shop.db", [Customer, Order, LineItem]) as db:    # the table "o
 
 `migrate` sees that the table `order` still holds the old shape, moves it aside, creates the new table, and runs the function, which can read and write any records.
 Then it points the foreign keys of the other tables to the new table, drops the old one, and checks that the classes match their tables and that every reference points to a record.
-If the db already has the new table, nothing happens, so it is safe to call at every start.
+If the db already has the new table, nothing happens, so running it again is safe.
+The file must exist and hold the old table; otherwise `migrate` raises.
 
 The new class can also have a name of its own: `inlay.migrate("shop.db", fn, Order, Purchase)` moves the data to a new table `purchase`, and the foreign keys of the other tables follow.
 The function gets a db with the old class, the new class, and the `other_entities`.
