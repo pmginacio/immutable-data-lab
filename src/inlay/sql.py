@@ -46,9 +46,12 @@ def quote(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
-def create_table_sql(m: EntityMeta) -> str:
-    """Written exactly the way SQLite stores it, so it can be compared with an existing table."""
-    return f"CREATE TABLE {quote(m.table)} ({', '.join(map(_column_def, m.fields))}) STRICT"
+def create_table_sql(m: EntityMeta, table: str | None = None) -> str:
+    """Written exactly the way SQLite stores it, so it can be compared with an existing table.
+
+    `table` is the name to use instead of the table of `m`, to compare a table with the shape of another class.
+    """
+    return f"CREATE TABLE {quote(table or m.table)} ({', '.join(map(_column_def, m.fields))}) STRICT"
 
 
 def create_index_sql(m: EntityMeta, index: tuple[FieldMeta, ...]) -> str:

@@ -31,8 +31,11 @@ from inlay.sql import (
     BEGIN,
     COMMIT,
     CONNECTION_SETUP,
+    FOREIGN_KEY_CHECK,
     LIST_INDEXES,
     LIST_TABLES,
+    MIGRATION_SETUP,
+    REFERRERS,
     RELEASE,
     ROLLBACK,
     ROLLBACK_TO,
@@ -43,8 +46,10 @@ from inlay.sql import (
     create_table_sql,
     delete_by_key_sql,
     delete_equal_sql,
+    drop_table_sql,
     insert_sql,
     rename_table_sql,
+    repoint_sql,
     reprefix_index_sql,
     select_sql,
     upsert_sql,
@@ -363,6 +368,72 @@ def rename(path: str | os.PathLike[str], old: str, new: str) -> None:
         conn.execute(COMMIT)
     finally:
         conn.close()  # also rolls back what was not committed
+
+
+def migrate(
+    path: str | os.PathLike[str],
+    fn: Callable[[Db], None],
+    old: type,
+    new: type,
+    other_entities: Iterable[type] = (),
+) -> None:
+    """Change the schema of one class and convert its records with `fn`, all or nothing.
+
+    `old` describes the table as it is stored and `new` the table it becomes; the old table is dropped at the end.
+    Either `new` takes the table name of the stored table (it is moved aside to the table name of `old`),
+    or `new` has a table name of its own. `fn` gets a db with `old`, `new` and `other_entities`.
+    Nothing happens if the db already has the table of `new`.
+    """
+    old_meta, new_meta = meta(old), meta(new)
+    if old_meta.table == new_meta.table:
+        raise ValueError(f"{old.__name__} and {new.__name__} use the same table; give the old class another name")
+    metas = {m.cls: m for m in map(meta, (old, new, *other_entities))}
+    conn = _connect(path, create=False)
+    try:
+        _execute_all(conn, (*MIGRATION_SETUP, BEGIN))
+        tables = dict(conn.execute(LIST_TABLES))
+        stored = tables.get(new_meta.table)
+        if stored == create_table_sql(new_meta):
+            return
+        if stored == create_table_sql(old_meta, new_meta.table):
+            conn.execute(rename_table_sql(new_meta.table, old_meta.table))
+            tables = dict(conn.execute(LIST_TABLES))
+        # Whichever way it started, the old table is stored under its own name and the new one does not exist yet.
+        if tables.get(old_meta.table) != create_table_sql(old_meta) or new_meta.table in tables:
+            raise SchemaMismatch(
+                f"cannot migrate {old.__name__} to {new.__name__}: the db needs a table {old_meta.table!r} "
+                f"that matches {old.__name__} and no table {new_meta.table!r}"
+            )
+        conn.execute(create_table_sql(new_meta))
+        fn(Db(conn, metas))
+        _repoint_referrers(conn, old_meta, new_meta)
+        conn.execute(drop_table_sql(old_meta.table))
+        # The indexes come last: a moved table keeps its index names, and `IF NOT EXISTS` would skip a clash.
+        _execute_all(conn, (create_index_sql(new_meta, index) for index in new_meta.indexes))
+        _check_tables(metas.values(), dict(conn.execute(LIST_TABLES)))
+        _check_foreign_keys(conn)
+        conn.execute(COMMIT)
+    finally:
+        conn.close()  # also rolls back what was not committed
+
+
+def _repoint_referrers(conn: sqlite3.Connection, old: EntityMeta, new: EntityMeta) -> None:
+    """Make the foreign keys of the other tables that point to the old table point to the new one."""
+    tables = dict(conn.execute(LIST_TABLES))
+    for (table,) in conn.execute(REFERRERS, (old.table,)).fetchall():
+        if table != old.table:
+            indexes = conn.execute(LIST_INDEXES, (table,)).fetchall()
+            _execute_all(conn, repoint_sql(table, tables[table], old, new))
+            _execute_all(conn, (sql for _, sql in indexes))  # dropping the table dropped them
+
+
+def _check_foreign_keys(conn: sqlite3.Connection) -> None:
+    broken = conn.execute(FOREIGN_KEY_CHECK).fetchall()
+    if broken:
+        table, _, parent, _ = broken[0]
+        raise BrokenRef(
+            f"{len(broken)} references point to records that are not stored, such as one in {table!r} to {parent!r}"
+        )
 
 
 def _connect(path: str | os.PathLike[str], *, create: bool) -> sqlite3.Connection:
