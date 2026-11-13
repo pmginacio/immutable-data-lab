@@ -4,6 +4,7 @@ from datetime import UTC, date, datetime
 import pytest
 
 import inlay
+import inlay.history
 from inlay import Ref, avg, entity, key, to_month
 
 
@@ -44,9 +45,10 @@ EVENTS = [
 ]
 
 
-@pytest.fixture
-def db(tmp_path):
-    with inlay.open([Customer, Order, Event], path=tmp_path / "shop.db") as db:
+# Every read test also runs against the history experiment, which must read its current data the same way.
+@pytest.fixture(params=[inlay.open, inlay.history.open], ids=["inlay", "history"])
+def db(request, tmp_path):
+    with request.param([Customer, Order, Event], path=tmp_path / "shop.db") as db:
         db.add(ANA, BOB, CID, *ORDERS, *EVENTS)
         yield db
 
