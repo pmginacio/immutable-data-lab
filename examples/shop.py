@@ -224,7 +224,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as folder:
         # inlay: `open` creates the tables and indexes the classes need, or checks that the ones in the file match.
         # The db is closed at the end of the block, like a file.
-        with inlay.open(Path(folder) / "shop.db", [Customer, Product, Order, OrderLine]) as db:
+        with inlay.open([Customer, Product, Order, OrderLine], path=Path(folder) / "shop.db") as db:
             ana = register(db, "ana@example.com", "Ana", "Lisbon")
             bob = register(db, "bob@example.com", "Bob", "Porto")
             cid = register(db, "cid@example.com", "Cid", "Lisbon")

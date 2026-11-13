@@ -61,12 +61,12 @@ def add_total_amount(db: Db) -> None:
 def test_a_field_can_be_computed_from_the_records_of_another_class(tmp_path):
     path = tmp_path / "shop.db"
     ana = Customer(name="Ana")
-    with inlay.open(path, [Customer, OrderBefore, LineItemBefore]) as db:
+    with inlay.open([Customer, OrderBefore, LineItemBefore], path=path) as db:
         db.add(ana, OrderBefore(id="o1", customer=ana.id), OrderBefore(id="o2", customer=ana.id))
         db.add(LineItemBefore(order="o1", price=10, qty=2), LineItemBefore(order="o1", price=5, qty=1))
 
-    inlay.migrate(path, add_total_amount, OrderLegacy, Order, other_entities=[LineItem])
+    inlay.migrate(add_total_amount, OrderLegacy, Order, other_entities=[LineItem], path=path)
 
-    with inlay.open(path, [Customer, Order, LineItem]) as db:
+    with inlay.open([Customer, Order, LineItem], path=path) as db:
         assert {o.id: o.total_amount for o in db[Order]} == {"o1": 25, "o2": 0}
         assert len(db[LineItem]) == 2

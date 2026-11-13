@@ -329,7 +329,11 @@ def _from_row(m: EntityMeta, row: Sequence[object]) -> Any:
     return m.cls(**{f.name: from_sql(value, f.py_type) for f, value in zip(m.fields, row, strict=True)})
 
 
-def open(path: str | os.PathLike[str], entities: Iterable[type]) -> Db:
+# Relative to the current directory, like any relative path.
+DEFAULT_PATH: Final = ".inlay.db"
+
+
+def open(entities: Iterable[type], *, path: str | os.PathLike[str] = DEFAULT_PATH) -> Db:
     metas = {m.cls: m for m in map(meta, entities)}
     _check_refs(metas)
     conn = _connect(path, create=True)
@@ -346,7 +350,7 @@ def open(path: str | os.PathLike[str], entities: Iterable[type]) -> Db:
     return Db(conn, metas)
 
 
-def rename(path: str | os.PathLike[str], old: str, new: str) -> None:
+def rename(old: str, new: str, *, path: str | os.PathLike[str] = DEFAULT_PATH) -> None:
     """Rename the table of the class called `old` to the one of the class called `new`, keeping its data.
 
     The references to the table in the other tables and the names of its indexes follow the new name.
@@ -371,11 +375,12 @@ def rename(path: str | os.PathLike[str], old: str, new: str) -> None:
 
 
 def migrate(
-    path: str | os.PathLike[str],
     fn: Callable[[Db], None],
     old: type,
     new: type,
     other_entities: Iterable[type] = (),
+    *,
+    path: str | os.PathLike[str] = DEFAULT_PATH,
 ) -> None:
     """Change the schema of one class and convert its records with `fn`, all or nothing.
 

@@ -42,7 +42,7 @@ class Everything:
 
 @pytest.fixture
 def db(tmp_path):
-    with inlay.open(tmp_path / "shop.db", [Customer, Order, Category, Everything]) as db:
+    with inlay.open([Customer, Order, Category, Everything], path=tmp_path / "shop.db") as db:
         yield db
 
 
@@ -224,7 +224,7 @@ def test_unknown_class(db):
 
 
 def test_closed_db(tmp_path):
-    with inlay.open(tmp_path / "shop.db", [Customer]) as db:
+    with inlay.open([Customer], path=tmp_path / "shop.db") as db:
         pass
     with pytest.raises(sqlite3.ProgrammingError):
         db[Customer].get("x")

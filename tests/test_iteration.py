@@ -32,7 +32,7 @@ BOB = Customer(id="bob", name="Bob", city="Porto")
 
 @pytest.fixture
 def db(tmp_path):
-    with inlay.open(tmp_path / "shop.db", [Customer, Order, Event]) as db:
+    with inlay.open([Customer, Order, Event], path=tmp_path / "shop.db") as db:
         db.add(ANA, BOB, Order(customer="ana", total=10))
         yield db
 
