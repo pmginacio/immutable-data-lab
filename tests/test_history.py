@@ -62,9 +62,11 @@ def test_update_adds_a_record_that_is_not_stored(db):
     assert {o.id for o in db[Order]} == {"o1", "o2"}
 
 
-def test_the_same_key_twice_in_one_update_ends_with_the_last_record(db):
-    db.update(replace(O1, total=1), replace(O1, total=2))
-    assert [o.total for o in db[Order]] == [2]
+def test_the_same_key_twice_in_one_update_raises_and_changes_nothing(db):
+    # Input is taken as given, and the unique live key refuses the second record, unlike inlay's upsert.
+    with pytest.raises(AlreadyExists):
+        db.update(replace(O1, total=1), replace(O1, total=2))
+    assert [o.total for o in db[Order]] == [10]
 
 
 def test_adding_a_key_that_is_current_raises(db):

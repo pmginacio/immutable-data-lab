@@ -250,9 +250,7 @@ class Db:
 
     def update(self, *objs: object) -> None:
         """Adds each record, or replaces the one with the same key, which stays in the history."""
-        # The last record with each key wins, as if they were written one by one.
-        latest = list({(type(o), getattr(o, meta(type(o)).key.name)): o for o in objs}.values())
-        self._apply_by_entity(latest, _delete_by_key, _insert)
+        self._apply_by_entity(objs, _delete_by_key, _insert)
 
     def remove(self, *objs: object) -> None:
         self._apply_by_entity(objs, _remove)
