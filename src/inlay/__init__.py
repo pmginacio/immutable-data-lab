@@ -9,6 +9,7 @@ from inlay.db import (
     SchemaMismatch,
     StoreError,
     open,
+    rename,
 )
 from inlay.entity import Ref, entity, key
 from inlay.functions import Aggregate, Function, avg, to_day, to_month
@@ -37,6 +38,7 @@ __all__ = [
     "none_of",
     "one_of",
     "open",
+    "rename",
     "to_day",
     "to_month",
 ]

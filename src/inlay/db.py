@@ -6,10 +6,11 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Final, Self, overload
+from urllib.parse import quote
 
 from inlay.conditions import own_value
 from inlay.functions import Aggregate, aggregate_of
-from inlay.meta import EntityMeta, meta
+from inlay.meta import EntityMeta, meta, table_name
 from inlay.nodes import (
     Compare,
     Condition,
@@ -30,6 +31,7 @@ from inlay.sql import (
     BEGIN,
     COMMIT,
     CONNECTION_SETUP,
+    LIST_INDEXES,
     LIST_TABLES,
     RELEASE,
     ROLLBACK,
@@ -42,6 +44,8 @@ from inlay.sql import (
     delete_by_key_sql,
     delete_equal_sql,
     insert_sql,
+    rename_table_sql,
+    reprefix_index_sql,
     select_sql,
     upsert_sql,
 )
@@ -323,7 +327,7 @@ def _from_row(m: EntityMeta, row: Sequence[object]) -> Any:
 def open(path: str | os.PathLike[str], entities: Iterable[type]) -> Db:
     metas = {m.cls: m for m in map(meta, entities)}
     _check_refs(metas)
-    conn = sqlite3.connect(path, autocommit=True)
+    conn = _connect(path, create=True)
     try:
         _execute_all(conn, (*CONNECTION_SETUP, BEGIN))
         tables = dict(conn.execute(LIST_TABLES))
@@ -335,6 +339,37 @@ def open(path: str | os.PathLike[str], entities: Iterable[type]) -> Db:
         conn.close()  # also rolls back the schema changes
         raise
     return Db(conn, metas)
+
+
+def rename(path: str | os.PathLike[str], old: str, new: str) -> None:
+    """Rename the table of the class called `old` to the one of the class called `new`, keeping its data.
+
+    The references to the table in the other tables and the names of its indexes follow the new name.
+    """
+    old_table, new_table = table_name(old), table_name(new)
+    conn = _connect(path, create=False)
+    try:
+        # With foreign keys on, SQLite also rewrites the references to the renamed table in the other tables.
+        _execute_all(conn, ("PRAGMA foreign_keys = ON", BEGIN))
+        tables = dict(conn.execute(LIST_TABLES))
+        if old_table not in tables:
+            raise SchemaMismatch(f"there is no table {old_table!r} to rename")
+        if new_table in tables:
+            raise SchemaMismatch(f"table {new_table!r} already exists")
+        conn.execute(rename_table_sql(old_table, new_table))
+        for name, sql in conn.execute(LIST_INDEXES, (new_table,)).fetchall():
+            if name.startswith(f"{old_table}__"):
+                _execute_all(conn, reprefix_index_sql(name, sql, old_table, new_table))
+        conn.execute(COMMIT)
+    finally:
+        conn.close()  # also rolls back what was not committed
+
+
+def _connect(path: str | os.PathLike[str], *, create: bool) -> sqlite3.Connection:
+    if create:
+        return sqlite3.connect(path, autocommit=True)
+    # Read-write mode only, so a wrong path raises instead of creating an empty file.
+    return sqlite3.connect(f"file:{quote(os.fspath(path))}?mode=rw", uri=True, autocommit=True)
 
 
 def _execute_all(conn: sqlite3.Connection, statements: Iterable[str]) -> None:
