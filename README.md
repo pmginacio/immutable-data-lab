@@ -256,58 +256,67 @@ A small shop app that uses all of this, with comments that point at each feature
 There are no migration files.
 A migration is a Python function that takes the db, and `migrate` runs it in one transaction: either all of it happens or none of it does.
 It changes the schema of one class.
-Here is the code before a change, while the migration exists, and after it.
+Here is a change that needs real computation: every order gets a `total_amount`, the sum of price times quantity over its line items.
+The code is shown before the change, while the migration exists, and after it.
 
-Before: `Order` has no `discount` yet.
+Before: an order has no `total_amount` yet.
 
 ```python
 @entity(indexes=[("customer",)])
 class Order:
     id: str = key()
     customer: Ref[Customer]
-    total: int
 
-with inlay.open("shop.db", [Customer, Order]) as db:    # the table "order" has the columns id, customer, total
+@entity(indexes=[("order",)])
+class LineItem:
+    id: str = key()
+    order: Ref[Order]
+    price: int
+    qty: int
+
+with inlay.open("shop.db", [Customer, Order, LineItem]) as db:    # the table "order" has the columns id, customer
     ...
 ```
 
-While: the old class stays in the code under another name, because it describes the table as it is stored.
-`Order` gets the new field, and the migration copies each old record into a new one.
+While: the old `Order` stays in the code under another name, because it describes the table as it is stored.
+`Order` gets the new field, and the migration builds each new order from the old one and its line items.
+`LineItem` does not change, but the function reads it, so it is passed as `other_entities`.
 
 ```python
-@entity(indexes=[("customer",)])
-class OrderLegacy:             # the old class, renamed
-    id: str = key()
-    customer: Ref[Customer]
-    total: int
-
 @entity(indexes=[("customer",)])
 class Order:                   # the new shape
     id: str = key()
     customer: Ref[Customer]
-    total: int
-    discount: int
+    total_amount: int
 
-def add_discount(db: Db) -> None:
-    db.add(*(Order(id=o.id, customer=o.customer, total=o.total, discount=0) for o in db[OrderLegacy]))
+# ---- migration: delete all of this once every db file has been migrated ----
+@entity(indexes=[("customer",)])
+class OrderLegacy:             # the old class, renamed
+    id: str = key()
+    customer: Ref[Customer]
 
-inlay.migrate("shop.db", add_discount, OrderLegacy, Order)    # migrates a db file once, and does nothing after that
+def add_total_amount(db: Db) -> None:
+    for old in db[OrderLegacy]:
+        lines = db[LineItem].filter(LineItem.order == old.id)
+        db.add(Order(id=old.id, customer=old.customer, total_amount=lines.sum(LineItem.price * LineItem.qty)))
 
-with inlay.open("shop.db", [Customer, Order]) as db:
+inlay.migrate("shop.db", add_total_amount, OrderLegacy, Order, other_entities=[LineItem])    # migrates a db file once, and does nothing after that
+# ---- end of migration ----
+
+with inlay.open("shop.db", [Customer, Order, LineItem]) as db:
     ...
 ```
 
-After: once every db file has been migrated, `OrderLegacy`, `add_discount` and the `migrate` call are deleted.
+After: once every db file has been migrated, everything between the two markers is deleted, and the new `Order` is all that is left.
 
 ```python
 @entity(indexes=[("customer",)])
 class Order:
     id: str = key()
     customer: Ref[Customer]
-    total: int
-    discount: int
+    total_amount: int
 
-with inlay.open("shop.db", [Customer, Order]) as db:    # the table "order" has the columns id, customer, total, discount
+with inlay.open("shop.db", [Customer, Order, LineItem]) as db:    # the table "order" has the columns id, customer, total_amount
     ...
 ```
 
@@ -316,7 +325,7 @@ Then it points the foreign keys of the other tables to the new table, drops the 
 If the db already has the new table, nothing happens, so it is safe to call at every start.
 
 The new class can also have a name of its own: `inlay.migrate("shop.db", fn, Order, Purchase)` moves the data to a new table `purchase`, and the foreign keys of the other tables follow.
-The function gets a db with the old class, the new class, and any classes passed as a fourth argument, `other_entities`.
+The function gets a db with the old class, the new class, and the `other_entities`.
 To only rename a class, with no change to its fields, call `inlay.rename("shop.db", "Order", "Purchase")`: it renames the table, its indexes, and the references to it.
 A change that does not alter the schema is not a migration, just an ordinary write.
 
