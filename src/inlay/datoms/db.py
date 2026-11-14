@@ -272,7 +272,8 @@ class Db:
     def update(self, *objs: object) -> None:
         """Adds each record, or replaces the one with the same key, which stays in the history.
 
-        Only the fields that change are written, so an update to an equal record writes nothing.
+        Only the fields that change get a datom, so an update to an equal record adds none,
+        though it still takes a transaction number.
         """
         self._apply_by_entity(objs, _update)
 

@@ -320,7 +320,7 @@ Storage is one table for every class, `_inlay_datoms`, written only by inserts:
   The value of a field at T is its newest datom at or before T, if that datom is added.
   A change adds the new value; a removal retracts every field.
 - A second write to a field in the same transaction replaces the first, as an empty version does in the history db.
-- An update writes only the fields that changed, compared in SQL, so an identical update writes nothing.
+- An update adds a datom only for the fields that changed, compared in SQL, so an identical update adds none, though it still takes a transaction number.
   The same key twice in one `update` keeps the last record, as in inlay.
 
 Indexes, in the terms of Datomic's:
