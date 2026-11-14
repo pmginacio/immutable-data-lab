@@ -7,12 +7,9 @@ import pytest
 
 import inlay.history
 from inlay import AlreadyExists, BrokenRef, Missing, Ref, entity, key
-from inlay.history.sql import delete_by_key_sql, select_sql, tx_time
+from inlay.history.sql import CURRENT, delete_by_key_sql, select_sql, tx_time
 from inlay.meta import meta
 from inlay.nodes import Compare, Filter, Table
-
-CURRENT = 2**63 - 1
-
 
 @entity
 class Customer:
