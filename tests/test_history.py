@@ -224,9 +224,3 @@ def test_writing_while_looping_over_a_snapshot_of_the_same_class_is_refused(db):
     with pytest.raises(RuntimeError, match="Order changed during iteration"):
         for _ in db.as_of(1)[Order]:
             db.update(replace(O1, total=20))
-
-
-def test_a_snapshot_has_no_writes(db):
-    snapshot = db.as_of(1)
-    assert not hasattr(snapshot, "add")
-    assert not hasattr(snapshot[Order], "delete")

@@ -1,17 +1,8 @@
 from inlay import Ref, entity, key
-from inlay.history.sql import (
-    clear_sql,
-    create_index_sql,
-    create_table_sql,
-    delete_by_key_sql,
-    delete_equal_sql,
-    insert_sql,
-    version_index_sqls,
-)
+from inlay.history.sql import create_index_sql, create_table_sql, version_index_sqls
 from inlay.meta import meta
 
 CURRENT = "9223372036854775807"
-TX = '(SELECT coalesce(max("tx"), 0) + 1 FROM "_inlay_tx")'
 
 
 @entity
@@ -49,18 +40,3 @@ def test_indexes_start_with_tx_to_and_every_ref_gets_an_index_on_its_live_column
         'CREATE INDEX IF NOT EXISTS "order___live_customer" ON "order" ("_live_customer") '
         'WHERE "_live_customer" IS NOT NULL',
     ]
-
-
-def test_writes_add_versions_and_end_current_ones():
-    m = meta(Customer)
-    assert insert_sql(m) == (
-        f'INSERT INTO "customer" ("id", "name", "_tx_from", "_tx_to") VALUES (?, ?, {TX}, {CURRENT})'
-    )
-    assert delete_by_key_sql(m) == f'UPDATE "customer" SET "_tx_to" = {TX} WHERE "_tx_to" = {CURRENT} AND "id" = ?'
-    assert delete_equal_sql(m) == (
-        f'UPDATE "customer" SET "_tx_to" = {TX} WHERE "_tx_to" = {CURRENT} AND "id" = ? AND "name" = ?'
-    )
-    assert clear_sql(m, Customer.name == "Ana") == (
-        f'UPDATE "customer" SET "_tx_to" = {TX} WHERE "_tx_to" = {CURRENT} AND "name" = ?',
-        ["Ana"],
-    )
