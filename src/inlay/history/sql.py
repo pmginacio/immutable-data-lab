@@ -123,16 +123,21 @@ def _column_def(f: FieldMeta) -> str:
 
 
 def _live_def(f: FieldMeta) -> str:
-    """The column that holds `f` on the current version and NULL on the others, which SQLite leaves unchecked."""
-    sql = (
+    """The column that holds `f` on the current version and NULL on the others, which SQLite leaves unchecked.
+
+    The key's is unique. A reference's points to its target's live key and is checked at commit,
+    so the order of writes inside a transaction does not matter.
+    """
+    target = None if f.target is None else meta(f.target)
+    return (
         f"{quote(_live(f))} {SQL_TYPES[f.py_type]} GENERATED ALWAYS AS "
-        f"(CASE WHEN {_IS_CURRENT} THEN {_column(f)} END) VIRTUAL"
+        f"(CASE WHEN {_IS_CURRENT} THEN {_column(f)} END) VIRTUAL "
+        + (
+            "UNIQUE"
+            if target is None
+            else f"REFERENCES {quote(target.table)} ({quote(_live(target.key))}) DEFERRABLE INITIALLY DEFERRED"
+        )
     )
-    if f.target is None:  # the key, the only other field that gets a live column
-        return sql + " UNIQUE"
-    target = meta(f.target)
-    # Checked at commit, so the order of writes inside a transaction does not matter.
-    return sql + f" REFERENCES {quote(target.table)} ({quote(_live(target.key))}) DEFERRABLE INITIALLY DEFERRED"
 
 
 def _live(f: FieldMeta) -> str:
