@@ -54,17 +54,18 @@ _IS_CURRENT = f"{quote(_TX_TO)} = {CURRENT}"
 TX_TABLE = "_inlay_tx"
 _TXS, _TX, _AT = quote(TX_TABLE), quote("tx"), quote("at")
 CREATE_TX_TABLE = f"CREATE TABLE {_TXS} ({_TX} INTEGER PRIMARY KEY, {_AT} INTEGER NOT NULL) STRICT"
-# Records a transaction just before it commits: the next number, at a time never earlier than the one before,
-# even when the clock goes back. The latest time is the newest transaction's, found by number rather than by reading all.
+# The number the open transaction will get: it holds the write lock, so nobody else can take it first.
+_THIS_TX = f"(SELECT coalesce(max({_TX}), 0) + 1 FROM {_TXS})"
+# Records a transaction just before it commits: its number, which its writes used, at a time never earlier than the
+# one before, even when the clock goes back. The latest time is the newest transaction's, found by number.
 # SQLite's clock has milliseconds, and round undoes the float error of turning its seconds into milliseconds.
 RECORD_TX = (
-    f"INSERT INTO {_TXS} ({_AT}) SELECT max(CAST(round(unixepoch('now', 'subsec') * 1000) AS INTEGER), "
+    f"INSERT INTO {_TXS} ({_TX}, {_AT}) SELECT {_THIS_TX}, "
+    f"max(CAST(round(unixepoch('now', 'subsec') * 1000) AS INTEGER), "
     f"coalesce((SELECT {_AT} FROM {_TXS} ORDER BY {_TX} DESC LIMIT 1), 0))"
 )
 LATEST_TX = f"SELECT coalesce(max({_TX}), 0) FROM {_TXS}"
 TX_AT = f"{LATEST_TX} WHERE {_AT} <= ?"
-# The number the open transaction will get: it holds the write lock, so nobody else can take it first.
-_THIS_TX = f"(SELECT coalesce(max({_TX}), 0) + 1 FROM {_TXS})"
 
 
 def tx_time(at: datetime) -> int:
