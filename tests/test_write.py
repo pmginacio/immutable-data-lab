@@ -144,11 +144,14 @@ def test_delete_by_key(db):
     assert db[Customer].get(ana.id) is None
 
 
-def test_delete_referenced_object_fails(db):
+@pytest.mark.parametrize(
+    "end", [lambda customers, ana: customers.delete(ana.id), lambda customers, ana: customers.clear()], ids=["delete", "clear"]
+)
+def test_delete_referenced_object_fails(db, end):
     ana = Customer(name="Ana")
     db.add(ana, Order(customer=ana.id, total=1))
     with pytest.raises(BrokenRef):
-        db[Customer].delete(ana.id)
+        end(db[Customer], ana)
     assert db[Customer].get(ana.id) == ana
 
 
