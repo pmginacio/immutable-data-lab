@@ -1,4 +1,4 @@
-"""An experiment: the history db storing facts, one for each field of a record, instead of rows.
+"""An experiment: the history db storing datoms, one for each field of a record, instead of rows.
 
 It starts as a copy of `inlay.history`. See "The datoms version" in notes/2026-11-13-immutable-db.md.
 """

@@ -285,75 +285,80 @@ A migration in an immutable db may simply be an ordinary transaction: add the re
 
 ## The datoms version
 
-The db stores facts, one for each field of a record: the entity, the attribute, the value, the transaction, and whether it was added or retracted.
-A record is the facts of one entity.
-A change retracts the old fact and adds a new one, and a deletion retracts all the facts of the entity.
-A relation is a fact whose value is the key of another entity.
+The db stores datoms, one for each field of a record: the entity, the attribute, the value, the transaction, and whether it was added or retracted.
+A record is the datoms of one entity.
+A change adds a datom with the new value, and a deletion retracts all the datoms of the entity.
+A relation is a datom whose value is the key of another entity.
 
 What it could give:
 
-- An optional field is a fact that is not there, so there is no NULL.
+- An optional field is a datom that is not there, so there is no NULL.
 - Adding a field needs no table rebuild, which answers part of the schema change problems.
 - History is kept for each field, and a change stores only the field that changed.
 
 What it costs:
 
-- Reading a record gathers its facts, so a read touches more rows than in a table of versions.
-- One value column cannot hold values of different types under `STRICT`.
-  It needs a table for each type, or an untyped column.
-- A condition on a field is a lookup of facts, and a condition through a relation is a join over facts.
+- Reading a record gathers its datoms, so a read touches more rows than in a table of versions.
+- One value column cannot hold values of different types under `STRICT`, except as `ANY`.
+- A condition on a field is a lookup of datoms, and a condition through a relation is a join over datoms.
 
 ### Design
 
-It lives in `src/inlay/datoms/`, which starts as a copy of the history db.
+It lives in `src/inlay/datoms/`, which started as a copy of the history db.
 It keeps the history db's transaction numbers, `as_of` and snapshots, and the same API.
 
-Storage is one table for every class, written only by inserts:
+Storage is one table for every class, `_inlay_datoms`, written only by inserts:
 
-    facts(class, e, a, v, tx, added)
+    _inlay_datoms(class, e, a, v, tx, added)
 
 - `class` is the class's table name, and `e` is the record's key, so keys stay unique within a class, as in inlay.
   The class has its own column instead of a namespace in `a`, as Datomic has, because `e` alone is not unique across classes.
-- `a` is the field name; a record has one fact for each field, and no fact for the key, which is `e`.
-- `v` has no type: `to_sql` writes it and `from_sql` reads it with the field's type, and a comparison only ever meets the values of one field.
-- `added` is false for a retraction, as in Datomic.
-  The value of a field at T is its newest fact at or before T, if that fact is added.
+- `a` is the field name; a record has one datom for each field, the key too.
+  The key's datom repeats `e`, but it is what says whether a record is stored, even for a class with no other field.
+- `v` is `ANY`: `to_sql` writes it and `from_sql` reads it with the field's type, and a comparison only ever meets the values of one field.
+- `added` is false for a retraction, as in Datomic, which keeps the value it retracts.
+  The value of a field at T is its newest datom at or before T, if that datom is added.
   A change adds the new value; a removal retracts every field.
+- A second write to a field in the same transaction replaces the first, as an empty version does in the history db.
 - An update writes only the fields that changed, compared in SQL, so an identical update writes nothing.
+  The same key twice in one `update` keeps the last record, as in inlay.
 
 Indexes, in the terms of Datomic's:
 
 - EAVT is the table itself: `WITHOUT ROWID`, with primary key `(class, e, a, tx)`.
-  It serves reading a record, a get by key, the newest fact of a field, and reading a whole class.
-- AVET is a partial index `(class, a, v, e, tx) WHERE class = … AND a = …` for each declared index, as Datomic only indexes the attributes marked for it.
+  It serves reading a record, a get by key, the newest datom of a field, and reading a whole class.
+- AVET will be a partial index `(class, a, v, e, tx) WHERE class = … AND a = …` for each field of a declared index, as Datomic only indexes the attributes marked for it.
+  Step A creates none, because its filters cannot use them.
 - VAET is the same partial index on each `Ref` field, which finds the records that point to a record.
-- AEVT and the log by transaction are left out.
+- The log is an index on `tx`, which finds the datoms of the open transaction for the reference checks.
+  Passing along the records the writes touched would avoid it, at the cost of state kept in Python across calls and savepoints.
+- AEVT is left out.
 
 There are no foreign keys or unique constraints: the library checks them.
-`AlreadyExists` and `Missing` are checked as each call runs.
-`BrokenRef` is checked at commit, so the order of writes does not matter, on the records the transaction's writes touched, which they pass along, so no index on `tx` is needed.
+`AlreadyExists` and `Missing` are checked as each call runs, by the row count of an insert that only writes when the record is stored, or not.
+`BrokenRef` is checked before a top-level transaction commits, so the order of writes does not matter, with two SELECTs for each `Ref` field: a reference added in the transaction to a record that is not stored, and a record removed in the transaction that a stored reference still points to.
 
-`open` does not check the classes against the stored facts in the first version.
+The iteration guard stays per class: datoms of another class never match a loop's `class = …`, so writing them cannot change what the loop returns.
+
+`open` does not check the classes against the stored datoms in the first version.
 
 ### Queries
 
-A class at T becomes a subquery that rebuilds its rows from its facts, in one pass along the primary key:
-
-    SELECT e, a, v, added, max(tx) FROM facts WHERE class = ? AND tx <= ? GROUP BY e, a
-
-with one row per record from `max(CASE a WHEN … THEN v END)` for each field, where `added` holds.
-SQLite takes the other columns of a `max()` group from the row with the maximum.
+A class at T becomes a subquery that rebuilds its rows from the newest datom of each field, with one row per record from `max(CASE a WHEN … THEN v END)` for each field, where the key's datom is added.
 The rest of the compiler stays as it is, on top of that subquery.
 
+It groups only once, by `e`, and picks the newest datoms with `NOT EXISTS` a newer one, which is a search on the primary key for each datom.
+The form with two groupings, the newest datom of each field by `max(tx)` and then one row per record, reads the datoms in one pass, but SQLite does not push a condition on the key through two groupings, so a `get` rebuilt the whole class.
+
 The risk is filters: a condition on the rebuilt rows cannot reach the partial indexes, so every filter rebuilds the whole class.
-A condition on the key is pushed down, since `e` is a `GROUP BY` column.
+A condition on the key is pushed down, since `e` is the `GROUP BY` column.
 
 The steps:
 
 1. A: the rebuilt rows only, then the benchmark.
-2. B: a condition on a field also compiles to a lookup of facts, `e IN (SELECT e FROM facts WHERE class = ? AND a = ? AND v > ? AND …newest at T…)`, through the partial index, if the benchmark shows filters are slow.
+2. B: a condition on a field also compiles to a lookup of datoms, `e IN (SELECT e FROM _inlay_datoms WHERE class = ? AND a = ? AND v > ? AND …newest at T…)`, through the partial index, if the benchmark shows filters are slow.
 
-Compiling every query to joins over facts, as Datalog does, was left out.
+Compiling every query to joins over datoms, as Datalog does, was left out.
 Each field read costs an index search, and another to check it is the newest at T, so loading many records costs several times as much as one pass, and it needs a new compiler for conditions, sorting, slices and aggregates.
 
 ## How to compare them

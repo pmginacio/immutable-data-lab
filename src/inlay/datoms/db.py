@@ -1,9 +1,9 @@
 import os
 import sqlite3
 from collections import Counter, defaultdict
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from types import TracebackType
 from typing import Any, Self, overload
@@ -15,7 +15,10 @@ from inlay.datoms.sql import (
     BEGIN,
     COMMIT,
     CONNECTION_SETUP,
+    CREATE_DATOMS,
+    CREATE_TX_INDEX,
     CREATE_TX_TABLE,
+    DATOMS_TABLE,
     LATEST_TX,
     LIST_TABLES,
     RECORD_TX,
@@ -25,16 +28,17 @@ from inlay.datoms.sql import (
     SAVEPOINT,
     TX_AT,
     TX_TABLE,
+    add_sql,
     aggregate_sql,
     clear_sql,
-    create_index_sql,
-    create_table_sql,
+    dangling_ref_sql,
     delete_by_key_sql,
     delete_equal_sql,
-    insert_sql,
+    ref_index_sql,
+    referenced_removal_sql,
     select_sql,
     tx_time,
-    version_index_sqls,
+    update_sql,
 )
 from inlay.meta import EntityMeta, meta
 from inlay.nodes import (
@@ -185,13 +189,17 @@ class RecordView[T]:
         return self._conn.execute(sql, params).fetchone()[0]
 
 
+@dataclass(frozen=True, eq=False)
 class RecordSet[T](RecordView[T]):
     """All the records of one class. Unlike a view, it can also delete."""
 
+    _ref_checks: tuple[str, ...] = field(kw_only=True)
+
     def delete(self, *keys: str) -> None:
         _check_idle(self._reading, [self._meta.cls])
-        with _transaction(self._conn):
-            deleted = self._conn.executemany(delete_by_key_sql(self._meta), ((to_sql(k),) for k in keys)).rowcount
+        with _transaction(self._conn, self._ref_checks):
+            sql = delete_by_key_sql(self._meta)
+            deleted = self._conn.executemany(sql, ((to_sql(k),) for k in keys)).rowcount // len(self._meta.fields)
             if deleted != len(keys):
                 raise Missing(f"{len(keys) - deleted} of the {self._meta.cls.__name__} keys are not stored")
 
@@ -200,7 +208,7 @@ class RecordSet[T](RecordView[T]):
         check_condition(self._meta.cls, cond)
         sql, params = clear_sql(self._meta, cond)
         _check_idle(self._reading, [self._meta.cls])
-        with _transaction(self._conn):
+        with _transaction(self._conn, self._ref_checks):
             self._conn.execute(sql, params)
 
 
@@ -218,13 +226,17 @@ class Snapshot:
 
 
 class Db:
-    def __init__(self, conn: sqlite3.Connection, metas: frozendict[type, EntityMeta]) -> None:
+    def __init__(
+        self, conn: sqlite3.Connection, metas: frozendict[type, EntityMeta], ref_checks: tuple[str, ...]
+    ) -> None:
         self._conn = conn
         self._metas = metas
+        self._ref_checks = ref_checks  # SELECTs that return a row if a reference is broken, run before commit
         self._reading: Counter[type] = Counter()
 
     def __getitem__[T](self, cls: type[T]) -> RecordSet[T]:
-        return RecordSet(self._conn, self._reading, Table(_meta_in(self._metas, cls).cls))
+        table = Table(_meta_in(self._metas, cls).cls)
+        return RecordSet(self._conn, self._reading, table, _ref_checks=self._ref_checks)
 
     @property
     def tx(self) -> int:
@@ -252,17 +264,17 @@ class Db:
         return Snapshot(self._conn, self._reading, self._metas, tx)
 
     def transaction(self) -> AbstractContextManager[None]:
-        return _transaction(self._conn)
+        return _transaction(self._conn, self._ref_checks)
 
     def add(self, *objs: object) -> None:
-        self._apply_by_entity(objs, _insert)
+        self._apply_by_entity(objs, _add)
 
     def update(self, *objs: object) -> None:
         """Adds each record, or replaces the one with the same key, which stays in the history.
 
-        The same key twice in one call raises `AlreadyExists`, while inlay's `update` keeps the last record.
+        Only the fields that change are written, so an update to an equal record writes nothing.
         """
-        self._apply_by_entity(objs, _delete_by_key, _insert)
+        self._apply_by_entity(objs, _update)
 
     def remove(self, *objs: object) -> None:
         self._apply_by_entity(objs, _remove)
@@ -281,32 +293,31 @@ class Db:
     ) -> None:
         self.close()
 
-    def _apply_by_entity(self, objs: Sequence[object], *writes: _Write) -> None:
-        """Runs `writes`, in order, on the records of each class, all in one transaction."""
+    def _apply_by_entity(self, objs: Sequence[object], write: _Write) -> None:
+        """Runs `write` on the records of each class, all in one transaction."""
         groups = _grouped(objs)
         _check_idle(self._reading, groups)
-        with _transaction(self._conn):
+        with _transaction(self._conn, self._ref_checks):
             for cls, group in groups.items():
-                m = _meta_in(self._metas, cls)
-                for write in writes:
-                    write(self._conn, m, group)
+                write(self._conn, _meta_in(self._metas, cls), group)
 
 
 # Writes the records of one class. It runs inside the transaction, so raising undoes the whole call.
 type _Write = Callable[[sqlite3.Connection, EntityMeta, list[object]], None]
 
 
-def _insert(conn: sqlite3.Connection, m: EntityMeta, group: list[object]) -> None:
-    conn.executemany(insert_sql(m), _rows(m, group))
+def _add(conn: sqlite3.Connection, m: EntityMeta, group: list[object]) -> None:
+    added = conn.executemany(add_sql(m), _rows(m, group)).rowcount // len(m.fields)
+    if added != len(group):
+        raise AlreadyExists(f"{len(group) - added} of the {m.cls.__name__} keys are stored already")
 
 
-def _delete_by_key(conn: sqlite3.Connection, m: EntityMeta, group: list[object]) -> None:
-    """Ends the current versions with the keys of `group`, if there are any."""
-    conn.executemany(delete_by_key_sql(m), ((to_sql(getattr(o, m.key.name)),) for o in group))
+def _update(conn: sqlite3.Connection, m: EntityMeta, group: list[object]) -> None:
+    conn.executemany(update_sql(m), _rows(m, group))
 
 
 def _remove(conn: sqlite3.Connection, m: EntityMeta, group: list[object]) -> None:
-    deleted = conn.executemany(delete_equal_sql(m), _rows(m, group)).rowcount
+    deleted = conn.executemany(delete_equal_sql(m), _rows(m, group)).rowcount // len(m.fields)
     if deleted != len(group):
         raise Missing(f"{len(group) - deleted} of the {m.cls.__name__} records are not stored")
 
@@ -344,29 +355,21 @@ _NESTED = (SAVEPOINT, RELEASE, (ROLLBACK_TO, RELEASE))
 
 
 @contextmanager
-def _transaction(conn: sqlite3.Connection) -> Iterator[None]:
-    """Runs a new transaction, or a savepoint inside an open one, so a failed call leaves nothing behind."""
-    begin, end, undo = _NESTED if conn.in_transaction else _TOP_LEVEL
-    with _store_errors():
-        _execute(conn, begin)
-        try:
-            yield
-            _execute(conn, end)
-        except BaseException:
-            _execute(conn, undo)
-            raise
+def _transaction(conn: sqlite3.Connection, ref_checks: Iterable[str]) -> Iterator[None]:
+    """Runs a new transaction, or a savepoint inside an open one, so a failed call leaves nothing behind.
 
-
-@contextmanager
-def _store_errors() -> Iterator[None]:
+    A new transaction runs `ref_checks` before it commits, so the order of writes inside it does not matter.
+    """
+    top_level = not conn.in_transaction
+    begin, end, undo = _TOP_LEVEL if top_level else _NESTED
+    _execute(conn, begin)
     try:
         yield
-    except sqlite3.IntegrityError as e:
-        match e.sqlite_errorname:
-            case "SQLITE_CONSTRAINT_UNIQUE":
-                raise AlreadyExists(str(e)) from e
-            case "SQLITE_CONSTRAINT_FOREIGNKEY":
-                raise BrokenRef("a Ref would point to a record that is not stored") from e
+        if top_level and any(conn.execute(sql).fetchone() for sql in ref_checks):
+            raise BrokenRef("a Ref would point to a record that is not stored")
+        _execute(conn, end)
+    except BaseException:
+        _execute(conn, undo)
         raise
 
 
@@ -392,18 +395,21 @@ def open(entities: Iterable[type], *, path: str | os.PathLike[str] = DEFAULT_PAT
     try:
         _execute(conn, (*CONNECTION_SETUP, BEGIN))
         tables = dict(conn.execute(LIST_TABLES))
-        _check_tables(metas.values(), tables)
-        if tables.get(TX_TABLE, CREATE_TX_TABLE) != CREATE_TX_TABLE:
-            raise SchemaMismatch(f"table {TX_TABLE!r} is not the history db's table of transactions")
-        create_tx = [CREATE_TX_TABLE] if TX_TABLE not in tables else []
-        create_tables = [create_table_sql(m) for m in metas.values() if m.table not in tables]
-        create_indexes = [create_index_sql(m, i) for m in metas.values() for i in m.indexes]
-        version_indexes = [sql for m in metas.values() for sql in version_index_sqls(m)]
-        _execute(conn, (*create_tx, *create_tables, *create_indexes, *version_indexes, COMMIT))
+        for name, create in _OWN_TABLES:
+            if tables.get(name, create) != create:
+                raise SchemaMismatch(f"table {name!r} was not made by inlay.datoms")
+        create_tables = [create for name, create in _OWN_TABLES if name not in tables]
+        refs = [(m, f, meta(f.target)) for m in metas.values() for f in m.fields if f.target is not None]
+        ref_indexes = [ref_index_sql(m, f) for m, f, _ in refs]
+        _execute(conn, (*create_tables, CREATE_TX_INDEX, *ref_indexes, COMMIT))
     except BaseException:
         conn.close()  # also rolls back the schema changes
         raise
-    return Db(conn, metas)
+    ref_checks = [check(m, f, target) for m, f, target in refs for check in (dangling_ref_sql, referenced_removal_sql)]
+    return Db(conn, metas, tuple(ref_checks))
+
+
+_OWN_TABLES = ((TX_TABLE, CREATE_TX_TABLE), (DATOMS_TABLE, CREATE_DATOMS))
 
 
 def _execute(conn: sqlite3.Connection, statements: str | Iterable[str]) -> None:
@@ -427,15 +433,4 @@ def _check_refs(metas: Mapping[type, EntityMeta]) -> None:
     ]
     if dangling:
         raise TypeError(f"Ref fields point to entities not passed to inlay.datoms.open: {', '.join(dangling)}")
-
-
-def _check_tables(metas: Collection[EntityMeta], tables: Mapping[str, str]) -> None:
-    """Raise if a table already in the db was created differently from what its entity needs now."""
-    changed = [m for m in metas if m.table in tables and tables[m.table] != create_table_sql(m)]
-    if changed:
-        raise SchemaMismatch("\n".join(_mismatch(m, tables[m.table]) for m in changed))
-
-
-def _mismatch(m: EntityMeta, stored_sql: str) -> str:
-    return f"table {m.table!r} does not match its entity:\n  in db:  {stored_sql}\n  entity: {create_table_sql(m)}"
 

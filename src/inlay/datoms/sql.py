@@ -23,9 +23,9 @@ from inlay.nodes import (
     Table,
     Value,
 )
-from inlay.types import SQL_TYPES, to_sql
+from inlay.types import to_sql
 
-CONNECTION_SETUP = ("PRAGMA foreign_keys = ON", "PRAGMA journal_mode = WAL")
+CONNECTION_SETUP = ("PRAGMA journal_mode = WAL",)
 BEGIN = "BEGIN IMMEDIATE"
 COMMIT = "COMMIT"
 ROLLBACK = "ROLLBACK"
@@ -39,16 +39,10 @@ def quote(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
-# The columns that every table of versions has: the transaction where a version starts, and where it ends.
-# A version is current from `_tx_from` up to but not including `_tx_to`, so one that starts and ends in the same
-# transaction is never read.
-# Every name the history db adds starts with an underscore, so it cannot clash with a field, a class or an index
-# unless that name starts with an underscore too, which nothing refuses but no class does in practice.
-_TX_FROM = "_tx_from"
-_TX_TO = "_tx_to"
-# The `tx_to` of a version that is still current, far larger than any transaction number in practice.
-CURRENT = 2**63 - 1
-_IS_CURRENT = f"{quote(_TX_TO)} = {CURRENT}"
+def _text(value: str) -> str:
+    """`value` as an SQL string literal."""
+    return "'" + value.replace("'", "''") + "'"
+
 
 # The table of transactions, with the number and the time of each, in whole milliseconds since 1970 in UTC.
 TX_TABLE = "_inlay_tx"
@@ -67,108 +61,153 @@ RECORD_TX = (
 LATEST_TX = f"SELECT coalesce(max({_TX}), 0) FROM {_TXS}"
 TX_AT = f"{LATEST_TX} WHERE {_AT} <= ?"
 
+# The table of datoms, for every class: field `a` of record `e` of class `class` is `v` from transaction `tx` on,
+# or no longer has a value if `added` is false. `class` is the table name of the class, and `e` is the record's key.
+# The value of a field at a transaction is its newest datomat or before it. Datoms are only ever inserted,
+# except that a second write to a field in the same transaction replaces the first.
+# `v` takes any type, and keeps the one `to_sql` gave it.
+DATOMS_TABLE = "_inlay_datoms"
+_DATOMS = quote(DATOMS_TABLE)
+CREATE_DATOMS = (
+    f"CREATE TABLE {_DATOMS} (class TEXT NOT NULL, e TEXT NOT NULL, a TEXT NOT NULL, v ANY NOT NULL, "
+    "tx INTEGER NOT NULL, added INTEGER NOT NULL, PRIMARY KEY (class, e, a, tx)) STRICT, WITHOUT ROWID"
+)
+# Finds the datoms of the open transaction, which the checks of references read.
+CREATE_TX_INDEX = f"CREATE INDEX IF NOT EXISTS {quote(DATOMS_TABLE + '__tx')} ON {_DATOMS} (tx)"
+_DATOM_COLUMNS = "class, e, a, v, tx, added"
+_UPSERT = "ON CONFLICT (class, e, a, tx) DO UPDATE SET v = excluded.v, added = excluded.added"
+
 
 def tx_time(at: datetime) -> int:
     """`at`, which has a timezone, in the unit of the stored transaction times, cut to the millisecond as SQLite's are."""
     return (at - datetime(1970, 1, 1, tzinfo=UTC)) // timedelta(milliseconds=1)
 
 
-def create_table_sql(m: EntityMeta) -> str:
-    """The CREATE TABLE statement for `m`.
-
-    SQLite keeps this text, and `open` compares it with what this function returns now,
-    so any change to it, even in spacing, makes existing files fail the schema check.
-
-    Each row is one version of a record, current from transaction `_tx_from` until `_tx_to`.
-    The `_live_` columns hold the key and the references of current versions only, so SQLite checks them as in inlay.
-    """
-    tx_columns = [f"{quote(name)} INTEGER NOT NULL" for name in (_TX_FROM, _TX_TO)]
-    live = [_live_def(f) for f in m.fields if f.is_key or f.target is not None]
-    columns = [*map(_column_def, m.fields), *tx_columns, *live]
-    return f"CREATE TABLE {quote(m.table)} ({', '.join(columns)}) STRICT"
-
-
-def create_index_sql(m: EntityMeta, index: tuple[FieldMeta, ...]) -> str:
-    """A declared index with `tx_to` in front, so that reading the current versions is an exact match on its first column."""
-    return _index_sql(m, [f.name for f in index], [quote(_TX_TO), *map(_column, index)])
-
-
-def version_index_sqls(m: EntityMeta) -> list[str]:
-    """The indexes every class needs: to read all of it, to read one record, and to check references.
-
-    The key comes before `tx_to`, so finding a current version by key matches both columns,
-    and SQLite chooses this index over `(tx_to, tx_from)` without needing statistics.
-    SQLite needs an index that starts with the column of a foreign key, or a removal scans the referring table.
-    That index leaves out the NULLs of old versions, which the foreign key check never looks for.
-    """
-    indexes = [
-        ([_TX_TO, _TX_FROM], [quote(_TX_TO), quote(_TX_FROM)]),
-        ([m.key.name, _TX_TO], [_column(m.key), quote(_TX_TO)]),
-    ]
-    lives = [_live(f) for f in m.fields if f.target is not None]
-    return [
-        *(_index_sql(m, names, columns) for names, columns in indexes),
-        *(_index_sql(m, [live], [quote(live)]) + f" WHERE {quote(live)} IS NOT NULL" for live in lives),
-    ]
-
-
-def _index_sql(m: EntityMeta, names: list[str], columns: list[str]) -> str:
-    """An index named after the table and `names`, on `columns`, which are already SQL."""
-    name = "__".join((m.table, *names))
-    return f"CREATE INDEX IF NOT EXISTS {quote(name)} ON {quote(m.table)} ({', '.join(columns)})"
-
-
-def _column_def(f: FieldMeta) -> str:
-    return f"{_column(f)} {SQL_TYPES[f.py_type]} NOT NULL"
-
-
-def _live_def(f: FieldMeta) -> str:
-    """The column that holds `f` on the current version and NULL on the others, which SQLite leaves unchecked.
-
-    The key's is unique. A reference's points to its target's live key and is checked at commit,
-    so the order of writes inside a transaction does not matter.
-    """
-    target = None if f.target is None else meta(f.target)
+def ref_index_sql(m: EntityMeta, f: FieldMeta) -> str:
+    """An index of the datoms of `Ref` field `f` by value, which finds the records that point to a record."""
     return (
-        f"{quote(_live(f))} {SQL_TYPES[f.py_type]} GENERATED ALWAYS AS "
-        f"(CASE WHEN {_IS_CURRENT} THEN {_column(f)} END) VIRTUAL "
-        + (
-            "UNIQUE"
-            if target is None
-            else f"REFERENCES {quote(target.table)} ({quote(_live(target.key))}) DEFERRABLE INITIALLY DEFERRED"
-        )
+        f"CREATE INDEX IF NOT EXISTS {_ref_index(m, f)} ON {_DATOMS} (class, a, v, e, tx) "
+        f"WHERE class = {_text(m.table)} AND a = {_text(f.name)}"
     )
 
 
-def _live(f: FieldMeta) -> str:
-    return f"_live_{f.name}"
+def _ref_index(m: EntityMeta, f: FieldMeta) -> str:
+    return quote("__".join((DATOMS_TABLE, m.table, f.name)))
 
 
-def insert_sql(m: EntityMeta) -> str:
-    """Adds a version that is current from this transaction on."""
-    marks = ", ".join("?" * len(m.fields))
-    tx_columns = f"{quote(_TX_FROM)}, {quote(_TX_TO)}"
-    return f"INSERT INTO {quote(m.table)} ({_columns(m)}, {tx_columns}) VALUES ({marks}, {_THIS_TX}, {CURRENT})"
+def _newest(expr: str, cls: str, e: str, a: str) -> str:
+    """`expr` over the newest datomof field `a` of record `e` of class `cls`, all SQL, or NULL if it has none."""
+    return f"(SELECT {expr} FROM {_DATOMS} WHERE class = {cls} AND e = {e} AND a = {a} ORDER BY tx DESC LIMIT 1)"
+
+
+def _is_live(target: EntityMeta, e: str) -> str:
+    """Whether the record of `target` with key `e`, which is SQL, is stored: its key's newest datomis added."""
+    return f"coalesce({_newest('added', _text(target.table), e, _text(target.key.name))}, 0)"
+
+
+def add_sql(m: EntityMeta) -> str:
+    """Adds the datoms of a record from the values of its fields, unless a record with its key is stored."""
+    return _write_sql(m, f"NOT {_is_live(m, _param(m, m.key))}")
+
+
+def update_sql(m: EntityMeta) -> str:
+    """Adds the datoms of a record from the values of its fields, except those that are its fields' values already."""
+    same = _newest("added AND v IS new.column2", _text(m.table), _param(m, m.key), "new.column1")
+    return _write_sql(m, f"NOT coalesce({same}, 0)")
+
+
+def _write_sql(m: EntityMeta, where: str) -> str:
+    """Adds a datomfor each field of a record whose field name and value, `new.column1` and `new.column2`, meet `where`.
+
+    It takes the values of the record's fields in order.
+    """
+    values = ", ".join(f"({_text(f.name)}, {_param(m, f)})" for f in m.fields)
+    return (
+        f"INSERT INTO {_DATOMS} ({_DATOM_COLUMNS}) "
+        f"SELECT {_text(m.table)}, {_param(m, m.key)}, new.column1, new.column2, {_THIS_TX}, 1 "
+        f"FROM (VALUES {values}) AS new WHERE {where} {_UPSERT}"
+    )
+
+
+def _param(m: EntityMeta, f: FieldMeta) -> str:
+    """The parameter of field `f` among the values of the fields of `m`."""
+    return f"?{m.fields.index(f) + 1}"
 
 
 def delete_by_key_sql(m: EntityMeta) -> str:
-    """Ends the current version with a key at this transaction. Nothing is deleted."""
-    return _close_sql(m, f"{_column(m.key)} = ?")
+    """Retracts the fields of the stored record with a key at this transaction."""
+    return _retract_sql(m, f"{_column(m.key)} = ?")
 
 
 def delete_equal_sql(m: EntityMeta) -> str:
-    """Ends the current version equal to a record at this transaction. Nothing is deleted."""
-    return _close_sql(m, " AND ".join(f"{_column(f)} = ?" for f in m.fields))
+    """Retracts the fields of the stored record equal to a record at this transaction."""
+    return _retract_sql(m, " AND ".join(f"{_column(f)} = ?" for f in m.fields))
 
 
 def clear_sql(m: EntityMeta, cond: Condition) -> tuple[str, list[object]]:
-    """Ends every current version that matches `cond` at this transaction, and its parameters."""
+    """Retracts the fields of every stored record that matches `cond` at this transaction, and its parameters."""
     where, params = condition_sql(cond, None)
-    return _close_sql(m, where), params
+    return _retract_sql(m, where), params
 
 
-def _close_sql(m: EntityMeta, where: str) -> str:
-    return f"UPDATE {quote(m.table)} SET {quote(_TX_TO)} = {_THIS_TX} WHERE {_IS_CURRENT} AND {where}"
+def _retract_sql(m: EntityMeta, where: str) -> str:
+    """Retracts every field of the stored records that meet `where`, a condition on their fields.
+
+    Each retraction keeps the value it retracts, as in Datomic.
+    """
+    keys = f"SELECT {_column(m.key)} FROM ({_rows_sql(m, None)}) WHERE {where}"
+    newest = (
+        f"SELECT class, e, a, v, added, max(tx) FROM {_DATOMS} "
+        f"WHERE class = {_text(m.table)} AND e IN ({keys}) GROUP BY e, a"
+    )
+    return (
+        f"INSERT INTO {_DATOMS} ({_DATOM_COLUMNS}) SELECT class, e, a, v, {_THIS_TX}, 0 "
+        f"FROM ({newest}) WHERE added {_UPSERT}"
+    )
+
+
+def dangling_ref_sql(m: EntityMeta, f: FieldMeta, target: EntityMeta) -> str:
+    """A row if a value of `Ref` field `f`, added in this transaction, points to no stored record of `target`."""
+    return (
+        f"SELECT 1 FROM {_DATOMS} AS r WHERE r.tx = {_THIS_TX} "
+        f"AND r.class = {_text(m.table)} AND r.a = {_text(f.name)} AND r.added "
+        f"AND NOT {_is_live(target, 'r.v')} LIMIT 1"
+    )
+
+
+def referenced_removal_sql(m: EntityMeta, f: FieldMeta, target: EntityMeta) -> str:
+    """A row if a record of `target`, removed in this transaction, is still the value of a stored `Ref` field `f`."""
+    newest_tx = _newest("tx", "r.class", "r.e", "r.a")
+    # Without statistics SQLite walks every datom of the class by its primary key instead.
+    referrers = (
+        f"SELECT 1 FROM {_DATOMS} AS r INDEXED BY {_ref_index(m, f)} "
+        f"WHERE r.class = {_text(m.table)} AND r.a = {_text(f.name)} "
+        f"AND r.v = k.e AND r.added AND r.tx = {newest_tx}"
+    )
+    return (
+        f"SELECT 1 FROM {_DATOMS} AS k WHERE k.tx = {_THIS_TX} "
+        f"AND k.class = {_text(target.table)} AND k.a = {_text(target.key.name)} AND NOT k.added "
+        f"AND EXISTS ({referrers}) LIMIT 1"
+    )
+
+
+def _rows_sql(m: EntityMeta, tx: int | None) -> str:
+    """A SELECT of the records of `m` at transaction `tx`, or of the current ones, rebuilt from their newest datoms.
+
+    It groups only once, so SQLite can push a condition on the key down to the datoms of one record;
+    through a second grouping, a `get` would rebuild the whole class. With `tx`, it takes two parameters.
+    """
+    at = "" if tx is None else " AND {}.tx <= ?"
+    newer = f"SELECT 1 FROM {_DATOMS} AS n WHERE n.class = d.class AND n.e = d.e AND n.a = d.a AND n.tx > d.tx"
+    fields = ", ".join(
+        f"d.e AS {_column(f)}" if f.is_key else f"max(CASE d.a WHEN {_text(f.name)} THEN d.v END) AS {_column(f)}"
+        for f in m.fields
+    )
+    return (
+        f"SELECT {fields} FROM {_DATOMS} AS d WHERE d.class = {_text(m.table)}{at.format('d')} "
+        f"AND NOT EXISTS ({newer}{at.format('n')}) "
+        f"GROUP BY d.e HAVING max(CASE d.a WHEN {_text(m.key.name)} THEN d.added END)"
+    )
 
 
 def _sql_op(op: CompareOp) -> str:
@@ -297,11 +336,7 @@ def _select(query: Query, tx: int | None) -> _Select:
     match query:
         case Table(cls):
             m = meta(cls)
-            table = f"SELECT {_columns(m)} FROM {quote(m.table)}"
-            if tx is None:
-                return _Select(m, tx, f"({table} WHERE {_IS_CURRENT})")
-            at_tx = f"{quote(_TX_FROM)} <= ? AND ? < {quote(_TX_TO)}"
-            return _Select(m, tx, f"({table} WHERE {at_tx})", (tx, tx))
+            return _Select(m, tx, f"({_rows_sql(m, tx)})", () if tx is None else (tx, tx))
         case Filter(source, cond):
             select = _open(_select(source, tx))
             return replace(select, where=(*select.where, cond))
