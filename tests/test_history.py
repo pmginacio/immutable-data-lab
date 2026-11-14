@@ -213,11 +213,22 @@ def test_as_of_now_reads_the_latest_transaction(db):
 
 
 @pytest.mark.parametrize(
-    "at, message", [(datetime(2026, 1, 1), "timezone"), (2, "no transaction 2"), (-1, "no transaction -1")]
+    "at, message", [(datetime(2026, 1, 1), "timezone"), (2, "no committed transaction 2"), (-1, "no committed transaction -1")]
 )
 def test_as_of_refuses_a_naive_time_and_a_transaction_that_does_not_exist(db, at, message):
     with pytest.raises(ValueError, match=message):
         db.as_of(at)
+
+
+def test_a_snapshot_inside_a_transaction_reads_the_last_committed_one(db):
+    with db.transaction():
+        db.update(replace(O1, total=20))
+        before = db.as_of(db.tx)
+        now = db.as_of(datetime.now(UTC))
+        db.update(replace(O1, total=30))
+        with pytest.raises(ValueError, match="no committed transaction 2"):
+            db.as_of(2)
+    assert [o.total for o in before[Order]] == [o.total for o in now[Order]] == [10]
 
 
 def test_writing_while_looping_over_a_snapshot_of_the_same_class_is_refused(db):

@@ -98,6 +98,7 @@ SQLite has no materialized views.
 
 A table `inlay_tx (tx INTEGER PRIMARY KEY CHECK (tx < MAX), at TEXT NOT NULL)` numbers the transactions.
 Each top-level transaction inserts a row right after `BEGIN IMMEDIATE`, and its writes use that number; a savepoint inside it shares it.
+`db.tx` and `as_of` only see committed transactions: an open one can still change, and after a rollback the next transaction reuses its number.
 `at` is the UTC time from SQLite's own clock, stored as the larger of now and the previous `at`, so times never go backwards when the clock does.
 SQLite's clock has milliseconds, so `as_of(time)` counts a transaction in the same millisecond as at or before it.
 `as_of` compares times with `julianday`, which reads both SQLite's times and Python's, whose digits of a second differ.

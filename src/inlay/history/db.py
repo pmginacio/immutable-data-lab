@@ -227,8 +227,11 @@ class Db:
 
     @property
     def tx(self) -> int:
-        """The number of the latest transaction, or 0 before the first write."""
-        return self._conn.execute(LATEST_TX).fetchone()[0]
+        """The number of the latest committed transaction, or 0 before the first write."""
+        latest = self._conn.execute(LATEST_TX).fetchone()[0]
+        # An open transaction has already taken the newest number, and no other connection can take one meanwhile.
+        # It is left out: its data can still change, and after a rollback the next transaction reuses its number.
+        return latest - 1 if self._conn.in_transaction else latest
 
     def as_of(self, at: int | datetime) -> Snapshot:
         """The db as it was at transaction `at`, or at the last transaction at or before the time `at`.
@@ -239,9 +242,9 @@ class Db:
         if isinstance(at, datetime):
             if at.tzinfo is None:
                 raise ValueError("as_of needs a datetime with a timezone, because transaction times are in UTC")
-            tx = self._conn.execute(TX_AT, (to_sql(at),)).fetchone()[0]
+            tx = min(self._conn.execute(TX_AT, (to_sql(at),)).fetchone()[0], self.tx)
         elif not 0 <= at <= self.tx:
-            raise ValueError(f"there is no transaction {at}; the latest is {self.tx}")
+            raise ValueError(f"there is no committed transaction {at}; the latest is {self.tx}")
         else:
             tx = at
         return Snapshot(self._conn, self._reading, self._metas, tx)
