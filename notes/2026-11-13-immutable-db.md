@@ -361,6 +361,36 @@ The steps:
 Compiling every query to joins over datoms, as Datalog does, was left out.
 Each field read costs an index search, and another to check it is the newest at T, so loading many records costs several times as much as one pass, and it needs a new compiler for conditions, sorting, slices and aggregates.
 
+### Benchmark
+
+The datoms version runs in the same `benchmarks/history.py`, with step A only, for 20,000 orders of 2,000 customers updated 10 and 20 times.
+
+| | inlay | history, 10 | datoms, 10 | history, 20 | datoms, 20 |
+|---|---|---|---|---|---|
+| add everything | 99 ms | 154 ms | 1,141 ms | 135 ms | 1,009 ms |
+| update all orders, one round | 105 ms | 1,191 ms | 661 ms | 1,208 ms | 720 ms |
+| 1,000 updates of one order | 73 ms | 299 ms | 139 ms | 257 ms | 121 ms |
+| remove 1,000 orders | 12 ms | 157 ms | 147 ms | 135 ms | 164 ms |
+| load all orders, now | 37 ms | 39 ms | 379 ms | 38 ms | 560 ms |
+| a filter, now | under 0.5 ms | under 0.5 ms | about 300 ms | under 0.5 ms | about 530 ms |
+| 2,000 gets, now | 37 ms | 44 ms | 112 ms | 45 ms | 122 ms |
+| a filter at the first transaction | | 16 to 18 ms | about 130 ms | 29 to 31 ms | about 150 ms |
+| file size | 4 MB | 62 MB | 41 MB | 112 MB | 67 MB |
+
+Updates are about 40% faster than in the history db, because nothing is ended: a change is one insert of the fields that changed.
+The file is about 40% smaller, for the same reason.
+
+Adding is 7 times slower than in the history db.
+It has not been profiled; each record checks that its key is not stored and writes a datom for each field, and the reference checks read the new datoms again.
+
+Every read that is not a get rebuilds the whole class, so a filter, a sort or a `len` costs about as much as loading all records, 700 to 9,000 times inlay's time.
+And it grows with history: from 10 to 20 versions, a filter now goes from about 300 to about 530 ms, because the rebuild reads every datom of the class.
+A get stays at about 0.06 ms, since the key is pushed down to the datoms of one entity.
+
+So step B is needed for filters on declared indexes, which would then read only the datoms of the matching entities.
+It does not help loading all records, `len` or aggregates, which still rebuild the class and keep growing with history.
+Those would need the current datoms apart from the old ones, for example an `added`, current-only copy of the newest datom of each field, which brings back the cost of ending old versions that made the history db's updates slow.
+
 ## How to compare them
 
 The versions should run the same reading code.
