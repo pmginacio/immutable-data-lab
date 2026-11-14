@@ -145,13 +145,19 @@ def test_delete_by_key(db):
 
 
 @pytest.mark.parametrize(
-    "end", [lambda customers, ana: customers.delete(ana.id), lambda customers, ana: customers.clear()], ids=["delete", "clear"]
+    "end",
+    [
+        lambda db, ana: db.remove(ana),
+        lambda db, ana: db[Customer].delete(ana.id),
+        lambda db, ana: db[Customer].clear(),
+    ],
+    ids=["remove", "delete", "clear"],
 )
 def test_delete_referenced_object_fails(db, end):
     ana = Customer(name="Ana")
     db.add(ana, Order(customer=ana.id, total=1))
     with pytest.raises(BrokenRef):
-        end(db[Customer], ana)
+        end(db, ana)
     assert db[Customer].get(ana.id) == ana
 
 
@@ -210,6 +216,19 @@ def test_store_errors_inside_a_transaction_can_be_caught(db):
             db.add(ana)
         db.add(bob)
     assert db[Customer].get(bob.id) == bob
+
+
+def test_a_failed_inner_block_undoes_its_writes_after_a_caught_error(db):
+    ana, bob = Customer(name="Ana"), Customer(name="Bob")
+    db.add(ana)
+    with db.transaction():
+        with pytest.raises(RuntimeError), db.transaction():
+            db.add(bob)
+            # The failed add's savepoint must be released, or the block's rollback would stop there and keep Bob.
+            with pytest.raises(AlreadyExists):
+                db.add(ana)
+            raise RuntimeError
+    assert db[Customer].get(bob.id) is None
 
 
 def test_failed_call_inside_a_transaction_writes_nothing(db):
