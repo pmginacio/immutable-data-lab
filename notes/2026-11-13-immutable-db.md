@@ -177,9 +177,11 @@ A snapshot shares the db's connection, so the db and its snapshots share one cou
 
 ### Out of scope for the first version
 
-- Erasing data for real, for example personal data. Datomic calls this excision.
+- Erasing data for real, for example personal data.
+  Datomic calls this excision.
 - Compacting old versions; storage only grows.
-- Detecting a lost update: reading at T and then updating a record that someone else changed since. The latest write wins, as in inlay.
+- Detecting a lost update: reading at T and then updating a record that someone else changed since.
+  The latest write wins, as in inlay.
 - A snapshot with its own connection, for use in another thread.
 
 ## Why not append-only
@@ -195,8 +197,11 @@ In append-only storage rows never disappear, so a deleted customer's old row sti
 
 Known systems split the same way.
 
-- A current table plus a history table: SQL:2011 system-versioned tables in SQL Server and MariaDB, and sqlite-history with triggers. The history table has no keys at all.
-- One table of versions with a time range: type 2 slowly changing dimensions, Snodgrass, and temporal keys in PostgreSQL 18 (`WITHOUT OVERLAPS` and `PERIOD`). Closing a range changes the old row. This is the design chosen here, enforced for the latest data only, which is the only data that can be written.
+- A current table plus a history table: SQL:2011 system-versioned tables in SQL Server and MariaDB, and sqlite-history with triggers.
+  The history table has no keys at all.
+- One table of versions with a time range: type 2 slowly changing dimensions, Snodgrass, and temporal keys in PostgreSQL 18 (`WITHOUT OVERLAPS` and `PERIOD`).
+  Closing a range changes the old row.
+  This is the design chosen here, enforced for the latest data only, which is the only data that can be written.
 - Append-only facts: Datomic and XTDB. They have no foreign keys, and references are checked by the application or in transaction functions.
 
 ## Schema changes: a follow-up
@@ -224,7 +229,8 @@ Known answers:
 - Generate a class from the stored schema (`dataclasses.make_dataclass`) when there is no upcaster.
 - Point references at an identity that outlives a shape, not at the table of one class, as Datomic does.
   It is the only known fix for problem 2.
-- Rewrite queries across schema versions (PRISM and PRISM++, Curino et al.). Complete, and far too much machinery here.
+- Rewrite queries across schema versions (PRISM and PRISM++, Curino et al.).
+  It is complete, and far too much machinery here.
 
 A migration in an immutable db may simply be an ordinary transaction: add the records of a new class, built from the old ones, and remove the old ones, whose history stays.
 

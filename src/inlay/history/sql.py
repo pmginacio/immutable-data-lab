@@ -40,6 +40,8 @@ def quote(name: str) -> str:
 
 
 # The columns that every table of versions has: the transaction where a version starts, and where it ends.
+# A version is current from `_tx_from` up to but not including `_tx_to`, so one that starts and ends in the same
+# transaction is never read.
 # Every name the history db adds starts with an underscore, so it cannot clash with a field, a class or its indexes.
 _TX_FROM = "_tx_from"
 _TX_TO = "_tx_to"
