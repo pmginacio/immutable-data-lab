@@ -364,7 +364,8 @@ Each field read costs an index search, and another to check it is the newest at 
 ## How to compare them
 
 The versions should run the same reading code.
-The tests that go through the db's API (`test_read.py`, `test_write.py`, `test_iteration.py` and parts of `test_db.py`) run against both.
+The tests that go through the db's API (`test_read.py`, `test_write.py`, `test_iteration.py` and parts of `test_db.py`) run against all of them.
+`test_as_of.py` runs the reads at past transactions against both history experiments, and `test_history.py` and `test_datoms.py` check how each stores its data.
 Tests of the SQL text, such as `test_condition_sql.py`, check inlay's own `sql.py` only.
 
 What to measure:
