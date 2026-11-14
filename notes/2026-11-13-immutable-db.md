@@ -2,7 +2,7 @@
 
 Notes from design discussions on 2026-11-13.
 These are the history experiments of `2026-11-13-roadmap.md`.
-The first version of item 2 is built, in `src/inlay/history/`, as designed below.
+The first version of item 2 is built, in `src/inlay/history/`, and the sections below describe it as built.
 
 The background is `2026-11-10-immutable-data-and-databases.md`, which describes Datomic and XTDB.
 
@@ -40,8 +40,9 @@ A row has `tx_from` and `tx_to`: the transaction where the version starts, and t
 A current version has `tx_to` equal to the largest 64-bit integer.
 
 - `add` inserts a row.
-- `update` sets `tx_to` of the current row to the transaction, and inserts the new version.
-- `remove` sets `tx_to` of the current row.
+- `update` sets `tx_to` of the current row with each record's key, if there is one, and then inserts the records as new versions.
+  So the same key twice in one call inserts two current versions, and the second raises `AlreadyExists`; inlay's upsert keeps the last record instead.
+- `remove`, `discard`, `delete` and `clear` set `tx_to` of the current rows they match.
 
 The data columns of a row never change.
 The only change to an existing row is `tx_to`, once, from current to a transaction number.
@@ -63,20 +64,22 @@ SQLite enforces keys and references, as it does in inlay today, through two kind
 NULLs do not count against `UNIQUE`, and SQLite does not check a foreign key with a NULL column, so old versions never block anything.
 Updating a referenced record leaves the referring table alone: its key is missing for a moment inside the transaction, and the deferred check at commit finds the new version.
 
-The `Order` of the README becomes:
+The `Order` of the README becomes, with the fields first, then the version columns, then the `live_` columns:
 
 ```sql
 CREATE TABLE "order" (
     "id" TEXT NOT NULL,
-    "tx_from" INTEGER NOT NULL,
-    "tx_to" INTEGER NOT NULL,
     "customer" TEXT NOT NULL,
     "total" INTEGER NOT NULL,
+    "tx_from" INTEGER NOT NULL,
+    "tx_to" INTEGER NOT NULL,
     "live_id" TEXT GENERATED ALWAYS AS (CASE WHEN "tx_to" = 9223372036854775807 THEN "id" END) VIRTUAL UNIQUE,
     "live_customer" TEXT GENERATED ALWAYS AS (CASE WHEN "tx_to" = 9223372036854775807 THEN "customer" END) VIRTUAL
         REFERENCES "customer" ("live_id") DEFERRABLE INITIALLY DEFERRED
 ) STRICT;
 ```
+
+The stored text is one line; `test_history_sql.py` has it exactly.
 
 Checked in scratch scripts on SQLite 3.54:
 
@@ -103,8 +106,9 @@ At a million transactions a second it would take about 290,000 years to get ther
 
 ### API
 
-The db is the same object as in inlay, with the same `dict[type, Set]` interface.
+The db has the same interface as inlay's, the same `dict[type, Set]`.
 It writes, and it reads the latest data; `db.transaction()` groups writes as today.
+Its default file is `.inlay-history.db`, so it never opens inlay's `.inlay.db` by accident.
 
 `db.as_of(tx)` takes a transaction number or a `datetime`, which means the last transaction at or before that time.
 It returns a `Snapshot`: an immutable value pinned to one transaction, with the same read interface and no write methods.
@@ -113,13 +117,13 @@ Writing to the past is not possible, and pyright reports it, because a snapshot'
 
 ```python
 with inlay.history.open([Customer, Order]) as db:
-    db.add(ana, order)
+    db.add(ana, order, other_order)
     with db.transaction():
         db.update(replace(order, total=0))
-        db[Order].delete(old.id)
+        db[Order].delete(other_order.id)
     big = db[Order].filter(Order.total > 100)
 
-    last_week = db.as_of(datetime(2026, 11, 6))
+    last_week = db.as_of(datetime(2026, 11, 6, tzinfo=UTC))
     last_week[Order].filter(Order.total > 100)
 ```
 
@@ -128,13 +132,14 @@ It was not chosen because it breaks up the `dict[type, Set]` interface.
 
 ### Queries
 
-The `Table` node gets the transaction it is read at: `Table(cls, tx)`, where no transaction means the latest data.
-`sql.py` renders a table in one place, so every relation subquery and aggregate gets the same filter.
+A view carries the transaction it reads at, and None for the latest data.
+It passes it to `select_sql`, `aggregate_sql` and `condition_sql`, and `sql.py` renders every table through one place, so relation subqueries and aggregates get the same filter.
+The query tree does not change: conditions are built without a db, so a `Table` inside a relation cannot know the transaction.
 
-- Latest: `tx_to = 9223372036854775807`.
-- At transaction T: `tx_from <= T AND T < tx_to`.
+- Latest: `(SELECT … FROM t WHERE tx_to = 9223372036854775807)`.
+- At transaction T: `(SELECT … FROM t WHERE tx_from <= ? AND ? < tx_to)`, with T passed twice.
 
-For example, `Order.customer.city == "Lisbon"` in a snapshot becomes `customer IN (SELECT id FROM customer WHERE tx_from <= ? AND ? < tx_to AND city = ?)`.
+For example, `Order.customer.city == "Lisbon"` in a snapshot becomes `customer IN (SELECT id FROM (SELECT … FROM customer WHERE tx_from <= ? AND ? < tx_to) WHERE city = ?)`.
 
 ### Indexes
 
