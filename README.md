@@ -350,6 +350,7 @@ with inlay.history.open([Customer, Order]) as db:    # the file is .inlay-histor
 
 An update or a removal ends the current version of a record and keeps it.
 SQLite still checks keys and references, so a current order must refer to a current customer.
+One difference from the db above: the same key twice in one `update` raises `AlreadyExists`, where inlay keeps the last record.
 A class cannot be changed yet, so there is no `migrate` or `rename`.
 The design and its limits are in [`notes/2026-11-13-immutable-db.md`](notes/2026-11-13-immutable-db.md).
 

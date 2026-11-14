@@ -253,7 +253,10 @@ class Db:
         self._apply_by_entity(objs, _insert)
 
     def update(self, *objs: object) -> None:
-        """Adds each record, or replaces the one with the same key, which stays in the history."""
+        """Adds each record, or replaces the one with the same key, which stays in the history.
+
+        The same key twice in one call raises `AlreadyExists`, while inlay's `update` keeps the last record.
+        """
         self._apply_by_entity(objs, _delete_by_key, _insert)
 
     def remove(self, *objs: object) -> None:

@@ -76,7 +76,7 @@ def test_an_update_keeps_the_old_version_and_reads_the_new_one(db, path):
 
 
 def test_the_same_key_twice_in_one_update_raises_and_changes_nothing(db):
-    # Input is taken as given, and the unique live key refuses the second record, unlike inlay's upsert.
+    # Both records are inserted as current versions, so the unique live_id refuses the second; inlay keeps the last.
     with pytest.raises(AlreadyExists):
         db.update(replace(O1, total=1), replace(O1, total=2))
     assert [o.total for o in db[Order]] == [10]
