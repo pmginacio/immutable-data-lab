@@ -239,6 +239,7 @@ class Db:
 
         Transaction times come from SQLite's clock, to the millisecond,
         so a transaction in the same millisecond as the time `at` counts as at or before it.
+        A transaction's time is when it began, so a long one counts as at or before a time during it.
         """
         if isinstance(at, datetime):
             if at.tzinfo is None:
