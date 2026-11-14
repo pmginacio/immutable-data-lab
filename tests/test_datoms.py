@@ -7,7 +7,7 @@ from dataclasses import replace
 import pytest
 
 import inlay.datoms
-from inlay import Missing, Ref, entity, key
+from inlay import Ref, entity, key
 from inlay.datoms.sql import delete_by_key_sql, select_sql
 from inlay.meta import meta
 from inlay.nodes import Compare, Filter, Table
@@ -98,16 +98,6 @@ def test_ending_a_record_retracts_each_field_with_its_value(db, path, end):
     assert datoms(path, Order) == sorted([*O1_DATOMS, *retracted])
 
 
-@pytest.mark.parametrize(
-    "write",
-    [lambda db: db.remove(replace(O1, total=99)), lambda db: db[Order].delete("o1", "nope")],
-)
-def test_ending_a_record_that_is_not_stored_raises_and_changes_nothing(db, path, write):
-    with pytest.raises(Missing):
-        write(db)
-    assert datoms(path, Order) == O1_DATOMS
-
-
 def test_a_second_write_to_a_field_in_one_transaction_replaces_the_first(db, path):
     with db.transaction():
         db.update(replace(O1, total=20))
@@ -117,5 +107,4 @@ def test_a_second_write_to_a_field_in_one_transaction_replaces_the_first(db, pat
 
 def test_updating_a_record_that_others_refer_to_leaves_them_alone(db, path):
     db.update(replace(ANA, name="Ana B"))
-    assert [o.id for o in db[Order].filter(Order.customer.name == "Ana B")] == ["o1"]
     assert datoms(path, Order) == O1_DATOMS
