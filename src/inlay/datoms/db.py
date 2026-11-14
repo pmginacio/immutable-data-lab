@@ -396,6 +396,7 @@ def _from_row(m: EntityMeta, row: Sequence[object]) -> Any:
 
 
 DEFAULT_PATH = ".inlay-datoms.db"
+_OWN_TABLES = ((TX_TABLE, CREATE_TX_TABLE), (DATOMS_TABLE, CREATE_DATOMS))
 
 
 def open(entities: Iterable[type], *, path: str | os.PathLike[str] = DEFAULT_PATH) -> Db:
@@ -409,7 +410,7 @@ def open(entities: Iterable[type], *, path: str | os.PathLike[str] = DEFAULT_PAT
             if tables.get(name, create) != create:
                 raise SchemaMismatch(f"table {name!r} was not made by inlay.datoms")
         create_tables = [create for name, create in _OWN_TABLES if name not in tables]
-        refs = [(m, f, meta(f.target)) for m in metas.values() for f in m.fields if f.target is not None]
+        refs = [(m, f, metas[f.target]) for m in metas.values() for f in m.fields if f.target is not None]
         ref_indexes = [ref_index_sql(m, f) for m, f, _ in refs]
         _execute(conn, (*create_tables, CREATE_TX_INDEX, *ref_indexes, COMMIT))
     except BaseException:
@@ -417,9 +418,6 @@ def open(entities: Iterable[type], *, path: str | os.PathLike[str] = DEFAULT_PAT
         raise
     ref_checks = [check(m, f, target) for m, f, target in refs for check in (dangling_ref_sql, referenced_removal_sql)]
     return Db(conn, metas, tuple(ref_checks))
-
-
-_OWN_TABLES = ((TX_TABLE, CREATE_TX_TABLE), (DATOMS_TABLE, CREATE_DATOMS))
 
 
 def _execute(conn: sqlite3.Connection, statements: str | Iterable[str]) -> None:
