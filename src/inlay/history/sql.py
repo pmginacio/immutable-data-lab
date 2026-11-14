@@ -40,14 +40,15 @@ def quote(name: str) -> str:
 
 
 # The columns that every table of versions has: the transaction where a version starts, and where it ends.
-_TX_FROM = "tx_from"
-_TX_TO = "tx_to"
+# Every name the history db adds starts with an underscore, so it cannot clash with a field, a class or its indexes.
+_TX_FROM = "_tx_from"
+_TX_TO = "_tx_to"
 # The `tx_to` of a version that is still current, far larger than any transaction number in practice.
 CURRENT = 2**63 - 1
 _IS_CURRENT = f"{quote(_TX_TO)} = {CURRENT}"
 
 # The table of transactions, with the number and the time of each, in whole milliseconds since 1970 in UTC.
-TX_TABLE = "inlay_tx"
+TX_TABLE = "_inlay_tx"
 _TXS, _TX, _AT = quote(TX_TABLE), quote("tx"), quote("at")
 CREATE_TX_TABLE = f"CREATE TABLE {_TXS} ({_TX} INTEGER PRIMARY KEY, {_AT} INTEGER NOT NULL) STRICT"
 # Starts a transaction: the next number, at a time never earlier than the one before, even when the clock goes back.
@@ -59,13 +60,13 @@ NEXT_TX = (
 )
 LATEST_TX = f"SELECT coalesce(max({_TX}), 0) FROM {_TXS}"
 TX_AT = f"{LATEST_TX} WHERE {_AT} <= ?"
+# Every top-level transaction adds its row first and holds the write lock, so the largest number is its own.
+_THIS_TX = f"(SELECT max({_TX}) FROM {_TXS})"
 
 
 def tx_time(at: datetime) -> int:
     """`at`, which has a timezone, in the unit of the stored transaction times, cut to the millisecond as SQLite's are."""
     return (at - datetime(1970, 1, 1, tzinfo=UTC)) // timedelta(milliseconds=1)
-# Every top-level transaction adds its row first and holds the write lock, so the largest number is its own.
-_THIS_TX = f"(SELECT max({_TX}) FROM {_TXS})"
 
 
 def create_table_sql(m: EntityMeta) -> str:
@@ -74,8 +75,8 @@ def create_table_sql(m: EntityMeta) -> str:
     SQLite keeps this text, and `open` compares it with what this function returns now,
     so any change to it, even in spacing, makes existing files fail the schema check.
 
-    Each row is one version of a record, current from transaction `tx_from` until `tx_to`.
-    The `live_` columns hold the key and the references of current versions only, so SQLite checks them as in inlay.
+    Each row is one version of a record, current from transaction `_tx_from` until `_tx_to`.
+    The `_live_` columns hold the key and the references of current versions only, so SQLite checks them as in inlay.
     """
     tx_columns = [f"{quote(name)} INTEGER NOT NULL" for name in (_TX_FROM, _TX_TO)]
     live = [_live_def(f) for f in m.fields if f.is_key or f.target is not None]
@@ -127,7 +128,7 @@ def _live_def(f: FieldMeta) -> str:
 
 
 def _live(f: FieldMeta) -> str:
-    return f"live_{f.name}"
+    return f"_live_{f.name}"
 
 
 def insert_sql(m: EntityMeta) -> str:

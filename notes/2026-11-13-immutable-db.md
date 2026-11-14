@@ -53,6 +53,10 @@ The primary key is SQLite's row id, not `(id, tx_from)`.
 Two writes to the same record in one transaction then need no special case: the version made first in the transaction is closed in the same transaction, its range is empty, and no read ever sees it.
 An ordinary index on `(id, tx_to)` serves the versions of one record.
 
+In the stored tables the columns are `_tx_from`, `_tx_to` and `_live_…`, and the table of transactions is `_inlay_tx`.
+Every name the history db adds starts with an underscore, so it cannot clash with a field, a class or a declared index, whose names never start with one in practice.
+This note writes them without the underscore, except where it shows the SQL.
+
 ### Integrity
 
 SQLite enforces keys and references, as it does in inlay today, through two kinds of generated columns.
@@ -73,11 +77,11 @@ CREATE TABLE "order" (
     "id" TEXT NOT NULL,
     "customer" TEXT NOT NULL,
     "total" INTEGER NOT NULL,
-    "tx_from" INTEGER NOT NULL,
-    "tx_to" INTEGER NOT NULL,
-    "live_id" TEXT GENERATED ALWAYS AS (CASE WHEN "tx_to" = 9223372036854775807 THEN "id" END) VIRTUAL UNIQUE,
-    "live_customer" TEXT GENERATED ALWAYS AS (CASE WHEN "tx_to" = 9223372036854775807 THEN "customer" END) VIRTUAL
-        REFERENCES "customer" ("live_id") DEFERRABLE INITIALLY DEFERRED
+    "_tx_from" INTEGER NOT NULL,
+    "_tx_to" INTEGER NOT NULL,
+    "_live_id" TEXT GENERATED ALWAYS AS (CASE WHEN "_tx_to" = 9223372036854775807 THEN "id" END) VIRTUAL UNIQUE,
+    "_live_customer" TEXT GENERATED ALWAYS AS (CASE WHEN "_tx_to" = 9223372036854775807 THEN "customer" END) VIRTUAL
+        REFERENCES "customer" ("_live_id") DEFERRABLE INITIALLY DEFERRED
 ) STRICT;
 ```
 
@@ -96,7 +100,7 @@ SQLite has no materialized views.
 
 ### Transactions
 
-A table `inlay_tx (tx INTEGER PRIMARY KEY, at INTEGER NOT NULL)` numbers the transactions.
+A table `_inlay_tx (tx INTEGER PRIMARY KEY, at INTEGER NOT NULL)` numbers the transactions.
 Each top-level transaction inserts a row right after `BEGIN IMMEDIATE`, and its writes use that number; a savepoint inside it shares it.
 `db.tx` and `as_of` only see committed transactions: an open one can still change, and after a rollback the next transaction reuses its number.
 A transaction that changes nothing, such as a read-only `db.transaction()` block or a `clear` that matches no record, still takes a number.

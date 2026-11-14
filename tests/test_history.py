@@ -43,12 +43,12 @@ def db(path):
 def versions(path, table):
     """Every stored version of `table`, as (id, tx_from, tx_to), in the order they were written."""
     with closing(sqlite3.connect(path)) as conn:
-        return conn.execute(f'SELECT "id", "tx_from", "tx_to" FROM "{table}" ORDER BY rowid').fetchall()
+        return conn.execute(f'SELECT "id", "_tx_from", "_tx_to" FROM "{table}" ORDER BY rowid').fetchall()
 
 
 def transactions(path):
     with closing(sqlite3.connect(path)) as conn:
-        return conn.execute('SELECT "tx", "at" FROM "inlay_tx" ORDER BY "tx"').fetchall()
+        return conn.execute('SELECT "tx", "at" FROM "_inlay_tx" ORDER BY "tx"').fetchall()
 
 
 @pytest.mark.parametrize(
@@ -60,10 +60,10 @@ def transactions(path):
     ids=["get", "end a version"],
 )
 def test_a_current_version_is_found_by_key_without_scanning(db, path, sql, params):
-    # Without statistics SQLite could also pick (tx_to, tx_from) and walk every current row.
+    # Without statistics SQLite could also pick (_tx_to, _tx_from) and walk every current row.
     with closing(sqlite3.connect(path)) as conn:
         plan = [row[3] for row in conn.execute(f"EXPLAIN QUERY PLAN {sql}", params)]
-    assert "SEARCH order USING INDEX order__id__tx_to (id=? AND tx_to=?)" in plan
+    assert "SEARCH order USING INDEX order__id___tx_to (id=? AND _tx_to=?)" in plan
 
 
 def test_an_update_keeps_the_old_version_and_reads_the_new_one(db, path):
@@ -73,7 +73,7 @@ def test_an_update_keeps_the_old_version_and_reads_the_new_one(db, path):
 
 
 def test_the_same_key_twice_in_one_update_raises_and_changes_nothing(db):
-    # Both records are inserted as current versions, so the unique live_id refuses the second; inlay keeps the last.
+    # Both records are inserted as current versions, so the unique _live_id refuses the second; inlay keeps the last.
     with pytest.raises(AlreadyExists):
         db.update(replace(O1, total=1), replace(O1, total=2))
     assert [o.total for o in db[Order]] == [10]
@@ -144,7 +144,7 @@ def test_updating_a_record_that_others_refer_to_leaves_them_alone(db, path):
 def test_each_write_takes_the_next_transaction_and_times_never_go_back(db, path):
     future = tx_time(datetime(2999, 1, 1, tzinfo=UTC))
     with closing(sqlite3.connect(path)) as conn, conn:
-        conn.execute('UPDATE "inlay_tx" SET "at" = ?', (future,))
+        conn.execute('UPDATE "_inlay_tx" SET "at" = ?', (future,))
     db.update(replace(O1, total=20))
     assert transactions(path) == [(1, future), (2, future)]
 
@@ -185,7 +185,7 @@ def test_as_of_a_time_reads_the_last_transaction_at_or_before_it(db, path):
     db.update(replace(O1, total=20))
     with closing(sqlite3.connect(path)) as conn, conn:
         conn.executemany(
-            'UPDATE "inlay_tx" SET "at" = ? WHERE "tx" = ?',
+            'UPDATE "_inlay_tx" SET "at" = ? WHERE "tx" = ?',
             [(tx_time(datetime(2026, 1, 1, tzinfo=UTC)), 1), (tx_time(datetime(2026, 2, 1, tzinfo=UTC)), 2)],
         )
     assert [o.total for o in db.as_of(datetime(2026, 1, 15, tzinfo=UTC))[Order]] == [10]
