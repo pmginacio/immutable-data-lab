@@ -1,5 +1,6 @@
 import re
 from annotationlib import ForwardRef
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 
@@ -41,6 +42,17 @@ def meta(cls: type) -> EntityMeta:
     if not isinstance(m, EntityMeta):
         raise TypeError(f"{cls.__name__} is not an @entity class")
     return m
+
+
+def metas(entities: Iterable[type]) -> frozendict[type, EntityMeta]:
+    # pyright's stub of frozendict declares an `__init__` with no arguments, although the constructor takes a mapping.
+    found = frozendict({m.cls: m for m in map(meta, entities)})  # pyright: ignore[reportCallIssue]
+    owners: dict[str, type] = {}
+    for m in found.values():
+        owner = owners.setdefault(m.table, m.cls)
+        if owner is not m.cls:
+            raise TypeError(f"{owner.__qualname__} and {m.cls.__qualname__} both use the table {m.table!r}")
+    return found
 
 
 def table_name(class_name: str) -> str:

@@ -40,7 +40,7 @@ from inlay.datoms.sql import (
     tx_time,
     update_sql,
 )
-from inlay.meta import EntityMeta, meta
+from inlay.meta import EntityMeta, meta, metas as _metas
 from inlay.nodes import (
     Compare,
     Condition,
@@ -425,11 +425,6 @@ def _execute(conn: sqlite3.Connection, statements: str | Iterable[str]) -> None:
     # A string is also an iterable of strings, one for each character, so it is checked first.
     for statement in (statements,) if isinstance(statements, str) else statements:
         conn.execute(statement)
-
-
-def _metas(entities: Iterable[type]) -> frozendict[type, EntityMeta]:
-    # pyright's stub of frozendict declares an `__init__` with no arguments, although the constructor takes a mapping.
-    return frozendict({m.cls: m for m in map(meta, entities)})  # pyright: ignore[reportCallIssue]
 
 
 def _check_refs(metas: Mapping[type, EntityMeta]) -> None:

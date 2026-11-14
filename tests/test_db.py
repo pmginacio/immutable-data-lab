@@ -97,3 +97,16 @@ def test_changed_class_raises_and_changes_nothing(open_db, tmp_path):
 def test_ref_target_must_be_opened_too(open_db, tmp_path):
     with pytest.raises(TypeError, match=r"not passed to inlay(\.history|\.datoms)?\.open: Order.customer -> Customer"):
         open_db([Order], path=tmp_path / "shop.db")
+
+
+def another_order() -> type:
+    @entity
+    class Order:
+        id: str = key()
+
+    return Order
+
+
+def test_two_classes_with_the_same_table_raise(open_db, tmp_path):
+    with pytest.raises(TypeError, match="both use the table 'order'"):
+        open_db([Customer, Order, another_order()], path=tmp_path / "shop.db")
