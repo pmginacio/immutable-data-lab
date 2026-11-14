@@ -2,7 +2,7 @@
 
 Notes from design discussions on 2026-11-13.
 These are the history experiments of `2026-11-13-roadmap.md`.
-The first version of item 2 is built, in `src/inlay/history/`, and the sections below describe it as built.
+The first version of the history db is built, as `inlay.history` in `src/inlay/history/`, and the sections below describe it as built.
 
 The background is `2026-11-10-immutable-data-and-databases.md`, which describes Datomic and XTDB.
 
@@ -20,7 +20,9 @@ In the same repo and package, as `src/inlay/history/`, with its own `db.py` and 
 `entity`, `meta`, `nodes`, `conditions`, `functions` and `types` describe classes and conditions, know nothing about storage, and are imported from inlay.
 A branch was not chosen, because the two versions should run the same read tests side by side.
 
-## Item 2, first version: one table of versions per class
+## The history db, first version
+
+It keeps one table of versions per class.
 
 ### Scope
 
@@ -217,7 +219,7 @@ Known answers:
 
 A migration in an immutable db may simply be an ordinary transaction: add the records of a new class, built from the old ones, and remove the old ones, whose history stays.
 
-## Item 3: datoms
+## The datoms version
 
 The db stores facts, one for each field of a record: the entity, the attribute, the value, the transaction, and whether it was added or retracted.
 A record is the facts of one entity.
@@ -236,10 +238,10 @@ What it costs:
 - One value column cannot hold values of different types under `STRICT`.
   It needs a table for each type, or an untyped column.
 - A condition on a field is a lookup of facts, and a condition through a relation is a join over facts.
-- The live columns of item 2 should fit: a fact gets `tx_from` and `tx_to`, and a fact whose value is a reference goes in a table of its own, so that it can have a foreign key to the entity.
+- The live columns of the history db should fit: a fact gets `tx_from` and `tx_to`, and a fact whose value is a reference goes in a table of its own, so that it can have a foreign key to the entity.
   This was not tried.
 
-Item 3 reuses the transaction numbers, the snapshots and the live columns of item 2, so item 2 comes first.
+The datoms version reuses the transaction numbers, the snapshots and the live columns of the history db, so the history db comes first.
 
 ## How to compare them
 
