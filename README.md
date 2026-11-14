@@ -348,6 +348,7 @@ with inlay.history.open([Customer, Order]) as db:    # the file is .inlay-histor
     before.add(order)                                 # AttributeError: a snapshot cannot be written
 ```
 
+`db.tx` is the number of the latest committed transaction, and 0 before the first write.
 An update or a removal ends the current version of a record and keeps it.
 SQLite still checks keys and references, so a current order must refer to a current customer.
 One difference from the db above: the same key twice in one `update` raises `AlreadyExists`, where inlay keeps the last record.
@@ -405,7 +406,7 @@ Each write call is atomic, and `db.transaction()` groups several, with savepoint
 
 **The core is pure.**
 Building conditions, compiling them, and building SQL statements are pure functions.
-Only the `db` module talks to SQLite.
+Only the `db` modules, `inlay.db` and `inlay.history.db`, talk to SQLite.
 
 | Module | Job |
 |---|---|

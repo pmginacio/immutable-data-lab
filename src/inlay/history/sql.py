@@ -89,7 +89,7 @@ def create_table_sql(m: EntityMeta) -> str:
 
 
 def create_index_sql(m: EntityMeta, index: tuple[FieldMeta, ...]) -> str:
-    """A declared index, after `tx_to`, so that reading the current versions is an exact match on its first column."""
+    """A declared index with `tx_to` in front, so that reading the current versions is an exact match on its first column."""
     return _index_sql(m, [f.name for f in index], [quote(_TX_TO), *map(_column, index)])
 
 

@@ -161,10 +161,10 @@ Most reads are of the latest data, which is an exact match on `tx_to`, so `tx_to
 - `(tx_to, tx_from)` serves reading a whole class, now or at T.
 - `(live_<ref>)` for each `Ref`: SQLite needs an index that starts with the child column of a foreign key, or removing a record scans the referring table.
   It is a partial index, `WHERE live_<ref> IS NOT NULL`, so old versions add nothing to it; the foreign key check only looks for real values.
-  Today the declared index of a `Ref` does both jobs; here the declared index serves reads and this one serves the foreign key.
+  In inlay the declared index of a `Ref` does both jobs; in the history db the declared index serves reads and this one serves the foreign key.
 - `(id, tx_to)` serves one record: its current version is an exact match on both columns, and a version at T is a range on `tx_to`.
-  With `tx_from` second, as first built, a current version matched only on the key, and SQLite chose `(tx_to, tx_from)` instead, walking every current row to find one key.
-  That made `update` of n records take time in proportion to n squared.
+  With `(id, tx_from)`, a current version would match only on the key, and SQLite would choose `(tx_to, tx_from)` instead, walking every current row to find one key.
+  That makes `update` of n records take time in proportion to n squared.
 
 Reads at a past T have two ranges, and an index seeks on one, so they are served less well.
 Whether this is good enough is for the benchmark to say.
@@ -256,12 +256,13 @@ What it costs:
 - The live columns of the history db should fit: a fact gets `tx_from` and `tx_to`, and a fact whose value is a reference goes in a table of its own, so that it can have a foreign key to the entity.
   This was not tried.
 
-The datoms version reuses the transaction numbers, the snapshots and the live columns of the history db, so the history db comes first.
+The datoms version would reuse the transaction numbers, the snapshots and the live columns of the history db, so the history db comes first.
 
 ## How to compare them
 
 The versions should run the same reading code.
-The read tests of inlay (`test_read.py`, `test_condition_sql.py`, and the like) can run against each, and the write tests carry over as long as the write API stays the same.
+The tests that go through the db's API (`test_read.py`, `test_write.py`, `test_iteration.py` and parts of `test_db.py`) run against both.
+Tests of the SQL text, such as `test_condition_sql.py`, check inlay's own `sql.py` only.
 
 What to measure:
 

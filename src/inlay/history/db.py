@@ -381,7 +381,6 @@ def _from_row(m: EntityMeta, row: Sequence[object]) -> Any:
     return m.cls(**{f.name: from_sql(value, f.py_type) for f, value in zip(m.fields, row, strict=True)})
 
 
-# Relative to the current directory, like any relative path.
 DEFAULT_PATH = ".inlay-history.db"
 
 

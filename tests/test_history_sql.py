@@ -28,7 +28,7 @@ def test_a_table_holds_versions_and_live_columns_for_the_key_and_references():
     )
 
 
-def test_indexes_start_with_tx_to_and_every_ref_gets_an_index_on_its_live_column():
+def test_declared_indexes_start_with_tx_to_and_every_ref_gets_an_index_on_its_live_column():
     m = meta(Order)
     assert [create_index_sql(m, i) for i in m.indexes] == [
         'CREATE INDEX IF NOT EXISTS "order__customer" ON "order" ("_tx_to", "customer")',
