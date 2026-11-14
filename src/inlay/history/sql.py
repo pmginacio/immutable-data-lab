@@ -145,7 +145,7 @@ def delete_equal_sql(m: EntityMeta) -> str:
 
 def clear_sql(m: EntityMeta, cond: Condition) -> tuple[str, list[object]]:
     """Ends every current version that matches `cond` at this transaction, and its parameters."""
-    where, params = condition_sql(cond)
+    where, params = condition_sql(cond, None)
     return _close_sql(m, where), params
 
 
@@ -157,7 +157,7 @@ def _sql_op(op: CompareOp) -> str:
     return "=" if op == "==" else op
 
 
-def condition_sql(cond: Condition, tx: int | None = None) -> tuple[str, list[object]]:
+def condition_sql(cond: Condition, tx: int | None) -> tuple[str, list[object]]:
     """The SQL for `cond`, and its parameters in order. `cond` was checked by `check_condition`.
 
     The records it reaches through relations are read at transaction `tx`, or the current ones if it is None.
@@ -227,7 +227,7 @@ def _column(field: FieldMeta) -> str:
     return quote(field.name)
 
 
-def select_sql(query: Query, tx: int | None = None) -> tuple[str, list[object]]:
+def select_sql(query: Query, tx: int | None) -> tuple[str, list[object]]:
     """A SELECT of every column of the records `query` picks at transaction `tx`, and its parameters in order.
 
     With no `tx`, it picks from the current records.
@@ -238,10 +238,10 @@ def select_sql(query: Query, tx: int | None = None) -> tuple[str, list[object]]:
 
 def aggregate_sql(
     query: Query,
+    tx: int | None,
     aggregate: Aggregate[Any],
     value: Value | None = None,
     keys: tuple[Value, ...] = (),
-    tx: int | None = None,
 ) -> tuple[str, list[object]]:
     """`aggregate` over the records `query` picks at transaction `tx`, of `value` if it takes one.
 

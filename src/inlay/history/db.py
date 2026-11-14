@@ -148,7 +148,7 @@ class RecordView[T]:
         many = isinstance(key, tuple)
         keys = tuple(own_value(self._meta.cls, k) for k in (key if many else (key,)))
         own = None if value is None else self._aggregated(aggregate, value)
-        sql, params = aggregate_sql(self._query, aggregate, own, keys, self._tx)
+        sql, params = aggregate_sql(self._query, self._tx, aggregate, own, keys)
         rows = self._conn.execute(sql, params).fetchall()
         key_types = [result_type(k) for k in keys]
         value_type = aggregate.result or result_type(own)
@@ -180,7 +180,7 @@ class RecordView[T]:
         return RecordView(self._conn, self._reading, query, self._tx)
 
     def _aggregate(self, aggregate: Aggregate[Any], value: Value | None = None) -> Any:
-        sql, params = aggregate_sql(self._query, aggregate, value, tx=self._tx)
+        sql, params = aggregate_sql(self._query, self._tx, aggregate, value)
         return self._conn.execute(sql, params).fetchone()[0]
 
 
