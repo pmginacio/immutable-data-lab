@@ -221,14 +221,14 @@ def _rows_sql(m: EntityMeta, tx: int | None) -> str:
     It groups only once, so SQLite can push a condition on the key down to the datoms of one record;
     through a second grouping, a `get` would rebuild the whole class. With `tx`, it takes two parameters.
     """
-    at = "" if tx is None else "\n            AND {}.tx <= ?"
+    at = "" if tx is None else " AND {}.tx <= ?"
     newer = f"""
         SELECT 1 FROM {_DATOMS} AS n
         WHERE n.class = d.class
             AND n.e = d.e
             AND n.a = d.a
             AND n.tx > d.tx{at.format('n')}"""
-    fields = ",\n            ".join(
+    fields = ", ".join(
         f"d.e AS {_column(f)}" if f.is_key else f"max(CASE d.a WHEN {_text(f.name)} THEN d.v END) AS {_column(f)}"
         for f in m.fields
     )
