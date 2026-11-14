@@ -191,7 +191,7 @@ class RecordSet[T](RecordView[T]):
     def delete(self, *keys: str) -> None:
         _check_idle(self._reading, [self._meta.cls])
         with _transaction(self._conn):
-            deleted = self._conn.executemany(delete_by_key_sql(self._meta), ((k,) for k in keys)).rowcount
+            deleted = self._conn.executemany(delete_by_key_sql(self._meta), ((to_sql(k),) for k in keys)).rowcount
             if deleted != len(keys):
                 raise Missing(f"{len(keys) - deleted} of the {self._meta.cls.__name__} keys are not stored")
 
