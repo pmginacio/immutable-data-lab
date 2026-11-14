@@ -165,20 +165,16 @@ def clear_sql(m: EntityMeta, cond: Condition) -> tuple[str, list[object]]:
 def _retract_sql(m: EntityMeta, where: str) -> str:
     """Retracts every field of the stored records that meet `where`, a condition on their fields.
 
-    Each retraction keeps the value it retracts, as in Datomic.
+    Each retraction keeps the value it retracts, as in Datomic, taken from the rebuilt records,
+    one row for each record and field.
     """
-    keys = f"""
-        SELECT {_column(m.key)} FROM ({_rows_sql(m, None)})
-        WHERE {where}"""
-    newest = f"""
-        SELECT class, e, a, v, added, max(tx) FROM {_DATOMS}
-        WHERE class = {_text(m.table)}
-            AND e IN ({keys})
-        GROUP BY e, a"""
+    names = ", ".join(f"({_text(f.name)})" for f in m.fields)
+    value = " ".join(f"WHEN {_text(f.name)} THEN r.{_column(f)}" for f in m.fields)
     return f"""
         INSERT INTO {_DATOMS} ({_DATOM_COLUMNS})
-        SELECT class, e, a, v, {_THIS_TX}, 0 FROM ({newest})
-        WHERE added
+        SELECT {_text(m.table)}, r.{_column(m.key)}, f.column1, CASE f.column1 {value} END, {_THIS_TX}, 0
+        FROM ({_rows_sql(m, None)}) AS r, (VALUES {names}) AS f
+        WHERE {where}
         {_UPSERT}"""
 
 
