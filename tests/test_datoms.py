@@ -55,7 +55,7 @@ def datoms(path, cls):
     [
         select_sql(Filter(Table(Order), Compare(meta(Order).key, "==", "o1")), None),
         select_sql(Filter(Table(Order), Compare(meta(Order).key, "==", "o1")), 1),
-        (delete_by_key_sql(meta(Order)), ["o1"]),
+        (delete_by_key_sql(meta(Order))[0], ["o1"]),
     ],
     ids=["get", "get at a transaction", "delete"],
 )
@@ -63,7 +63,7 @@ def test_a_record_is_found_by_key_without_rebuilding_its_class(db, path, sql, pa
     # SQLite pushes a condition on the key through one grouping only; through two it rebuilds every record.
     with closing(sqlite3.connect(path)) as conn:
         plan = [row[3] for row in conn.execute(f"EXPLAIN QUERY PLAN {sql}", params)]
-    assert any(row.startswith("SEARCH d ") and "(class=? AND e=?)" in row for row in plan)
+    assert any(row.startswith("SEARCH ") and "(class=? AND e=?)" in row for row in plan)
 
 
 def test_an_update_adds_a_datom_only_for_the_fields_that_change(db, path):
@@ -103,6 +103,20 @@ def test_a_second_write_to_a_field_in_one_transaction_replaces_the_first(db, pat
         db.update(replace(O1, total=20))
         db.update(replace(O1, total=30))
     assert datoms(path, Order) == [*O1_DATOMS, ("o1", "total", 30, 2, 1)]
+
+
+def test_the_current_table_holds_the_newest_datom_of_each_field(db, path):
+    o2 = Order(id="o2", customer="ana", total=5)
+    db.add(o2)
+    with db.transaction():
+        db.update(replace(O1, total=20), replace(O1, total=10))
+        db.update(replace(O1, total=30))
+    db.remove(o2)
+    newest = """
+        SELECT class, e, a, v, added FROM _inlay_datoms AS d
+        WHERE tx = (SELECT max(tx) FROM _inlay_datoms WHERE class = d.class AND e = d.e AND a = d.a)"""
+    with closing(sqlite3.connect(path)) as conn:
+        assert sorted(conn.execute(newest)) == sorted(conn.execute("SELECT * FROM _inlay_current"))
 
 
 def test_updating_a_record_that_others_refer_to_leaves_them_alone(db, path):

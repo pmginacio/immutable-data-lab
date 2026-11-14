@@ -80,8 +80,20 @@ CREATE_DATOMS = f"""CREATE TABLE {_DATOMS} (
 ) STRICT, WITHOUT ROWID"""
 # Finds the datoms of the open transaction, which the checks of references read.
 CREATE_TX_INDEX = f"CREATE INDEX IF NOT EXISTS {quote(DATOMS_TABLE + '__tx')} ON {_DATOMS} (tx)"
-_DATOM_COLUMNS = "class, e, a, v, tx, added"
-_UPSERT = f"ON CONFLICT ({_DATOM_KEY}) DO UPDATE SET v = excluded.v, added = excluded.added"
+
+# The latest datom of each field of each record, without its transaction, so the present is read without the history.
+# Every write puts the same rows in both tables. A removed record keeps its rows, with `added` false.
+CURRENT_TABLE = "_inlay_current"
+_CURRENT = quote(CURRENT_TABLE)
+_CURRENT_KEY = "class, e, a"
+CREATE_CURRENT = f"""CREATE TABLE {_CURRENT} (
+    class TEXT NOT NULL,
+    e TEXT NOT NULL,
+    a TEXT NOT NULL,
+    v ANY NOT NULL,
+    added INTEGER NOT NULL,
+    PRIMARY KEY ({_CURRENT_KEY})
+) STRICT, WITHOUT ROWID"""
 
 
 def tx_time(at: datetime) -> int:
@@ -90,57 +102,80 @@ def tx_time(at: datetime) -> int:
 
 
 def ref_index_sql(m: EntityMeta, f: FieldMeta) -> str:
-    """An index of the datoms of `Ref` field `f` by value, which finds the records that point to a record."""
+    """An index of the current values of `Ref` field `f`, which finds the records that point to a record."""
     return f"""
-        CREATE INDEX IF NOT EXISTS {_ref_index(m, f)} ON {_DATOMS} (class, a, v, e, tx)
+        CREATE INDEX IF NOT EXISTS {_ref_index(m, f)} ON {_CURRENT} (v)
         WHERE class = {_text(m.table)}
             AND a = {_text(f.name)}"""
 
 
 def _ref_index(m: EntityMeta, f: FieldMeta) -> str:
-    return quote("__".join((DATOMS_TABLE, m.table, f.name)))
+    return quote("__".join((CURRENT_TABLE, m.table, f.name)))
 
 
-def _newest(expr: str, cls: str, e: str, a: str) -> str:
-    """`expr` over the newest datom of field `a` of record `e` of class `cls`, all SQL, or NULL if it has none."""
-    return f"""(
-        SELECT {expr} FROM {_DATOMS}
-        WHERE class = {cls}
+def _stored(target: EntityMeta, e: str) -> str:
+    """Whether the record of `target` with key `e`, which is SQL, is stored."""
+    return f"""EXISTS (
+        SELECT 1 FROM {_CURRENT}
+        WHERE class = {_text(target.table)}
             AND e = {e}
-            AND a = {a}
-        ORDER BY tx DESC LIMIT 1
+            AND a = {_text(target.key.name)}
+            AND added
     )"""
 
 
-def _is_live(target: EntityMeta, e: str) -> str:
-    """Whether the record of `target` with key `e`, which is SQL, is stored: its key's newest datom is added."""
-    return f"coalesce({_newest('added', _text(target.table), e, _text(target.key.name))}, 0)"
+# Each write is a pair of statements, run in turn for each record: its datoms, then the same rows in the current table.
+type Writes = tuple[str, str]
 
 
-def add_sql(m: EntityMeta) -> str:
+def add_sql(m: EntityMeta) -> Writes:
     """Adds the datoms of a record from the values of its fields, unless a record with its key is stored."""
-    return _write_sql(m, f"NOT {_is_live(m, _param(m, m.key))}")
+    return _write_sql(m, f"NOT {_stored(m, _param(m, m.key))}")
 
 
-def update_sql(m: EntityMeta) -> str:
+def update_sql(m: EntityMeta) -> Writes:
     """Adds the datoms of a record from the values of its fields, except those that are its fields' values already."""
-    same = _newest("added AND v IS new.v", _text(m.table), _param(m, m.key), "new.a")
-    return _write_sql(m, f"NOT coalesce({same}, 0)")
+    current = f"""(
+        SELECT v FROM {_CURRENT}
+        WHERE class = {_text(m.table)}
+            AND e = {_param(m, m.key)}
+            AND a = new.a
+            AND added
+    )"""
+    return _write_sql(m, f"new.v IS NOT {current}")
 
 
-def _write_sql(m: EntityMeta, where: str) -> str:
+def _write_sql(m: EntityMeta, where: str) -> Writes:
     """Adds a datom for each field `new.a` of a record, with value `new.v`, that meets `where`.
 
     It takes the values of the record's fields in order.
     """
     values = ", ".join(f"({_text(f.name)}, {_param(m, f)})" for f in m.fields)
-    # The WITH goes after INSERT, because sqlite3 reports no row count for a statement that starts with WITH.
-    return f"""
-        INSERT INTO {_DATOMS} ({_DATOM_COLUMNS})
+    return _into_both(f"""
         WITH new(a, v) AS (VALUES {values})
-        SELECT {_text(m.table)}, {_param(m, m.key)}, new.a, new.v, {_THIS_TX}, 1 FROM new
-        WHERE {where}
-        {_UPSERT}"""
+        SELECT {_text(m.table)}, {_param(m, m.key)}, new.a, new.v, 1 FROM new
+        WHERE {where}""")
+
+
+def _into_both(rows: str) -> Writes:
+    """Writes the rows of `rows`, a SELECT of (class, e, a, v, added), as datoms of this transaction and as current.
+
+    `rows` reads the current table only, which the first statement does not change, so both pick the same rows.
+    """
+    # The WITH of `rows` stays in a subquery, because sqlite3 reports no row count for a statement that starts
+    # with WITH. A SELECT before ON CONFLICT needs a WHERE, or SQLite reads ON as part of a join.
+    return (
+        f"""
+        INSERT INTO {_DATOMS} (class, e, a, v, added, tx)
+        SELECT *, {_THIS_TX} FROM ({rows})
+        WHERE true
+        ON CONFLICT ({_DATOM_KEY}) DO UPDATE SET v = excluded.v, added = excluded.added""",
+        f"""
+        INSERT INTO {_CURRENT} (class, e, a, v, added)
+        SELECT * FROM ({rows})
+        WHERE true
+        ON CONFLICT ({_CURRENT_KEY}) DO UPDATE SET v = excluded.v, added = excluded.added""",
+    )
 
 
 def _param(m: EntityMeta, f: FieldMeta) -> str:
@@ -148,39 +183,33 @@ def _param(m: EntityMeta, f: FieldMeta) -> str:
     return f"?{m.fields.index(f) + 1}"
 
 
-def delete_by_key_sql(m: EntityMeta) -> str:
+def delete_by_key_sql(m: EntityMeta) -> Writes:
     """Retracts the fields of the stored record with a key at this transaction."""
     return _retract_sql(m, f"{_column(m.key)} = ?")
 
 
-def delete_equal_sql(m: EntityMeta) -> str:
+def delete_equal_sql(m: EntityMeta) -> Writes:
     """Retracts the fields of the stored record equal to a record at this transaction."""
     return _retract_sql(m, " AND ".join(f"{_column(f)} = ?" for f in m.fields))
 
 
-def clear_sql(m: EntityMeta, cond: Condition) -> tuple[str, list[object]]:
+def clear_sql(m: EntityMeta, cond: Condition) -> tuple[Writes, list[object]]:
     """Retracts the fields of every stored record that matches `cond` at this transaction, and its parameters."""
     where, params = condition_sql(cond, None)
     return _retract_sql(m, where), params
 
 
-def _retract_sql(m: EntityMeta, where: str) -> str:
+def _retract_sql(m: EntityMeta, where: str) -> Writes:
     """Retracts every field of the stored records that meet `where`, a condition on their fields.
 
-    Each retraction keeps the value it retracts, as in Datomic, taken from the rebuilt records,
-    one row for each record and field.
+    Each retraction keeps the value it retracts, as in Datomic.
     """
-    rows, _ = _rows_sql(m, None)  # the current records take no parameters
-    names = ", ".join(f"({_text(f.name)})" for f in m.fields)
-    value = " ".join(f"WHEN {_text(f.name)} THEN r.{_column(f)}" for f in m.fields)
-    # `where` names fields without a table, and no field starts with an underscore, so `_name` cannot clash.
-    return f"""
-        INSERT INTO {_DATOMS} ({_DATOM_COLUMNS})
-        WITH f(_name) AS (VALUES {names})
-        SELECT {_text(m.table)}, r.{_column(m.key)}, f._name, CASE f._name {value} END, {_THIS_TX}, 0
-        FROM ({rows}) AS r, f
-        WHERE {where}
-        {_UPSERT}"""
+    records, _ = _rows_sql(m, None)  # the current records take no parameters
+    return _into_both(f"""
+        SELECT c.class, c.e, c.a, c.v, 0 FROM {_CURRENT} AS c
+        WHERE c.class = {_text(m.table)}
+            AND c.added
+            AND c.e IN (SELECT {_column(m.key)} FROM ({records}) WHERE {where})""")
 
 
 def dangling_ref_sql(m: EntityMeta, f: FieldMeta, target: EntityMeta) -> str:
@@ -191,21 +220,19 @@ def dangling_ref_sql(m: EntityMeta, f: FieldMeta, target: EntityMeta) -> str:
             AND r.class = {_text(m.table)}
             AND r.a = {_text(f.name)}
             AND r.added
-            AND NOT {_is_live(target, 'r.v')}
+            AND NOT {_stored(target, 'r.v')}
         LIMIT 1"""
 
 
 def referenced_removal_sql(m: EntityMeta, f: FieldMeta, target: EntityMeta) -> str:
     """A row if a record of `target`, removed in this transaction, is still the value of a stored `Ref` field `f`."""
-    newest_tx = _newest("tx", "r.class", "r.e", "r.a")
-    # Without statistics SQLite walks every datom of the class by its primary key instead.
+    # Without statistics SQLite walks every current row of the class by its primary key instead.
     referrers = f"""
-        SELECT 1 FROM {_DATOMS} AS r INDEXED BY {_ref_index(m, f)}
+        SELECT 1 FROM {_CURRENT} AS r INDEXED BY {_ref_index(m, f)}
         WHERE r.class = {_text(m.table)}
             AND r.a = {_text(f.name)}
             AND r.v = k.e
-            AND r.added
-            AND r.tx = {newest_tx}"""
+            AND r.added"""
     return f"""
         SELECT 1 FROM {_DATOMS} AS k
         WHERE k.tx = {_THIS_TX}
@@ -217,35 +244,47 @@ def referenced_removal_sql(m: EntityMeta, f: FieldMeta, target: EntityMeta) -> s
 
 
 def _rows_sql(m: EntityMeta, tx: int | None) -> tuple[str, list[object]]:
-    """A SELECT of the records of `m` at transaction `tx`, or of the current ones, rebuilt from their newest datoms,
-    and its parameters.
+    """A SELECT of the records of `m` at transaction `tx`, rebuilt from their newest datoms,
+    or of the current ones, from the current table, and its parameters.
 
-    It groups only once, so SQLite can push a condition on the key down to the datoms of one record;
+    Each groups only once, by `e`, so SQLite can push a condition on the key down to the rows of one record;
     through a second grouping, a `get` would rebuild the whole class.
     """
-
-    def at(alias: str) -> str:
-        return "" if tx is None else f" AND {alias}.tx <= ?"
-
+    if tx is None:
+        return f"""
+            SELECT
+                {_fields(m, 'c')}
+            FROM {_CURRENT} AS c
+            WHERE c.class = {_text(m.table)}
+                AND c.added
+            GROUP BY c.e""", []
     newer = f"""
         SELECT 1 FROM {_DATOMS} AS n
         WHERE n.class = d.class
             AND n.e = d.e
             AND n.a = d.a
-            AND n.tx > d.tx{at('n')}"""
-    fields = ", ".join(
-        f"d.e AS {_column(f)}" if f.is_key else f"max(CASE d.a WHEN {_text(f.name)} THEN d.v END) AS {_column(f)}"
-        for f in m.fields
-    )
+            AND n.tx > d.tx
+            AND n.tx <= ?"""
     sql = f"""
         SELECT
-            {fields}
+            {_fields(m, 'd')}
         FROM {_DATOMS} AS d
-        WHERE d.class = {_text(m.table)}{at('d')}
+        WHERE d.class = {_text(m.table)}
+            AND d.tx <= ?
             AND NOT EXISTS ({newer})
         GROUP BY d.e
         HAVING max(CASE d.a WHEN {_text(m.key.name)} THEN d.added END)"""
-    return sql, [] if tx is None else [tx, tx]
+    return sql, [tx, tx]
+
+
+def _fields(m: EntityMeta, alias: str) -> str:
+    """The fields of `m` as columns, from the rows of one record in table `alias`, one for each field."""
+    return ", ".join(
+        f"{alias}.e AS {_column(f)}"
+        if f.is_key
+        else f"max(CASE {alias}.a WHEN {_text(f.name)} THEN {alias}.v END) AS {_column(f)}"
+        for f in m.fields
+    )
 
 
 def _sql_op(op: CompareOp) -> str:

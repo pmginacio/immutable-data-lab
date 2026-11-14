@@ -15,9 +15,11 @@ from inlay.datoms.sql import (
     BEGIN,
     COMMIT,
     CONNECTION_SETUP,
+    CREATE_CURRENT,
     CREATE_DATOMS,
     CREATE_TX_INDEX,
     CREATE_TX_TABLE,
+    CURRENT_TABLE,
     DATOMS_TABLE,
     LATEST_TX,
     LIST_TABLES,
@@ -28,6 +30,7 @@ from inlay.datoms.sql import (
     SAVEPOINT,
     TX_AT,
     TX_TABLE,
+    Writes,
     add_sql,
     aggregate_sql,
     clear_sql,
@@ -198,18 +201,18 @@ class RecordSet[T](RecordView[T]):
     def delete(self, *keys: str) -> None:
         _check_idle(self._reading, [self._meta.cls])
         with _transaction(self._conn, self._ref_checks):
-            cursor = self._conn.executemany(delete_by_key_sql(self._meta), ((to_sql(k),) for k in keys))
-            deleted = _records(self._meta, cursor)
+            written = _write(self._conn, delete_by_key_sql(self._meta), ((to_sql(k),) for k in keys))
+            deleted = _records(self._meta, written)
             if deleted != len(keys):
                 raise Missing(f"{len(keys) - deleted} of the {self._meta.cls.__name__} keys are not stored")
 
     def clear(self, *conds: Condition | bool) -> None:
         cond = all_of(*conds)
         check_condition(self._meta.cls, cond)
-        sql, params = clear_sql(self._meta, cond)
+        writes, params = clear_sql(self._meta, cond)
         _check_idle(self._reading, [self._meta.cls])
         with _transaction(self._conn, self._ref_checks):
-            self._conn.execute(sql, params)
+            _write(self._conn, writes, [params])
 
 
 @dataclass(frozen=True, eq=False)
@@ -308,32 +311,46 @@ type _Write = Callable[[sqlite3.Connection, EntityMeta, list[object]], None]
 
 
 def _add(conn: sqlite3.Connection, m: EntityMeta, group: list[object]) -> None:
-    added = _records(m, conn.executemany(add_sql(m), _rows(m, group)))
+    added = _records(m, _write(conn, add_sql(m), _rows(m, group)))
     if added != len(group):
         raise AlreadyExists(f"{len(group) - added} of the {m.cls.__name__} keys are stored already")
 
 
 def _update(conn: sqlite3.Connection, m: EntityMeta, group: list[object]) -> None:
-    conn.executemany(update_sql(m), _rows(m, group))
+    _write(conn, update_sql(m), _rows(m, group))
 
 
 def _remove(conn: sqlite3.Connection, m: EntityMeta, group: list[object]) -> None:
-    deleted = _records(m, conn.executemany(delete_equal_sql(m), _rows(m, group)))
+    deleted = _records(m, _write(conn, delete_equal_sql(m), _rows(m, group)))
     if deleted != len(group):
         raise Missing(f"{len(group) - deleted} of the {m.cls.__name__} records are not stored")
 
 
 def _discard(conn: sqlite3.Connection, m: EntityMeta, group: list[object]) -> None:
-    conn.executemany(delete_equal_sql(m), _rows(m, group))
+    _write(conn, delete_equal_sql(m), _rows(m, group))
 
 
-def _records(m: EntityMeta, cursor: sqlite3.Cursor) -> int:
-    """How many records of `m` the writes of `cursor` added or retracted.
+def _write(conn: sqlite3.Connection, writes: Writes, params: Iterable[Sequence[object]]) -> int:
+    """Runs both statements of `writes` for each set of parameters in turn, and returns how many datoms they wrote.
+
+    Not `executemany`: the conditions of a record must see the current table after the record before it,
+    or the same key twice in one call would be checked against the same old value.
+    """
+    datoms, current = writes
+    written = 0
+    for p in params:
+        written += conn.execute(datoms, p).rowcount
+        conn.execute(current, p)
+    return written
+
+
+def _records(m: EntityMeta, datoms: int) -> int:
+    """How many records of `m` a write that wrote `datoms` datoms added or retracted.
 
     Each one writes a datom for every field, which holds while stored records have the fields of the class;
     `open` does not check that yet, so after a class changes the count is wrong.
     """
-    return cursor.rowcount // len(m.fields)
+    return datoms // len(m.fields)
 
 
 def _grouped(objs: Iterable[object]) -> dict[type, list[object]]:
@@ -396,7 +413,7 @@ def _from_row(m: EntityMeta, row: Sequence[object]) -> Any:
 
 
 DEFAULT_PATH = ".inlay-datoms.db"
-_OWN_TABLES = ((TX_TABLE, CREATE_TX_TABLE), (DATOMS_TABLE, CREATE_DATOMS))
+_OWN_TABLES = ((TX_TABLE, CREATE_TX_TABLE), (DATOMS_TABLE, CREATE_DATOMS), (CURRENT_TABLE, CREATE_CURRENT))
 
 
 def open(entities: Iterable[type], *, path: str | os.PathLike[str] = DEFAULT_PATH) -> Db:
