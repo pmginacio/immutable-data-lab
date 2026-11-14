@@ -54,16 +54,16 @@ def datoms(path, cls):
     "sql, params",
     [
         select_sql(Filter(Table(Order), Compare(meta(Order).key, "==", "o1")), None),
+        select_sql(Filter(Table(Order), Compare(meta(Order).key, "==", "o1")), 1),
         (delete_by_key_sql(meta(Order)), ["o1"]),
     ],
-    ids=["get", "delete"],
+    ids=["get", "get at a transaction", "delete"],
 )
 def test_a_record_is_found_by_key_without_rebuilding_its_class(db, path, sql, params):
     # SQLite pushes a condition on the key through one grouping only; through two it rebuilds every record.
     with closing(sqlite3.connect(path)) as conn:
         plan = [row[3] for row in conn.execute(f"EXPLAIN QUERY PLAN {sql}", params)]
-    # Reading a whole class shows as a search on the class alone.
-    assert not any(row.endswith("(class=?)") for row in plan)
+    assert any(row.startswith("SEARCH d ") and "(class=? AND e=?)" in row for row in plan)
 
 
 def test_an_update_adds_a_datom_only_for_the_fields_that_change(db, path):
