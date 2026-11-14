@@ -32,6 +32,8 @@ CUSTOMERS = 2_000
 GETS = 2_000
 SINGLE_UPDATES = 1_000
 REMOVES = 1_000
+MIXED_CUSTOMERS = 200
+MIXED_ORDERS = 2_000
 
 
 @entity
@@ -54,6 +56,8 @@ class Workload:
     rounds: list[list[Order]]  # every order, updated, once per round
     singles: list[Order]  # updated one call at a time
     removed: list[Order]
+    renamed: list[Customer]  # every customer, with a new name
+    mixed_orders: list[Order]  # updated in one call with customers that get their names back
     extra_round: list[Order]  # one more round, run after the reads
     gets: list[str]  # keys of orders that exist at every transaction
 
@@ -68,8 +72,11 @@ def workload(orders: int, versions: int) -> Workload:
     removed = random.sample(list(current.values()), REMOVES)
     removed_keys = {o.id for o in removed}
     remaining = [o for o in current.values() if o.id not in removed_keys]
+    renamed = [replace(c, name=c.name + "'") for c in customers]
+    mixed_orders = [replace(o, total=random.randrange(1000)) for o in random.sample(remaining, MIXED_ORDERS)]
     extra_round = [replace(o, total=random.randrange(1000)) for o in remaining]
-    return Workload(customers, first, rounds, singles, removed, extra_round, [o.id for o in random.sample(remaining, GETS)])
+    gets = [o.id for o in random.sample(remaining, GETS)]
+    return Workload(customers, first, rounds, singles, removed, renamed, mixed_orders, extra_round, gets)
 
 
 def once(fn: Callable[[], object]) -> float:
@@ -89,6 +96,10 @@ def write_all(db: inlay.Db | inlay.history.Db, w: Workload) -> dict[str, float]:
         / len(w.rounds),
         f"{SINGLE_UPDATES} updates of one order": once(lambda: [db.update(o) for o in w.singles]),
         f"remove {REMOVES} orders": once(lambda: db.remove(*w.removed)),
+        f"update all {CUSTOMERS} customers": once(lambda: db.update(*w.renamed)),
+        f"{MIXED_CUSTOMERS} customers and {MIXED_ORDERS} orders in one call": once(
+            lambda: db.update(*w.customers[:MIXED_CUSTOMERS], *w.mixed_orders)
+        ),
     }
 
 
