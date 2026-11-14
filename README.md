@@ -437,9 +437,10 @@ This is version one, and the limits are on purpose.
 inlay needs Python 3.15 or later.
 
 ```
-uv run pytest                      # tests
-uv run pyright                     # type checks, including the example
-uv run python examples/shop.py     # the example app
+uv run pytest                          # tests
+uv run pyright                         # type checks, including the example and the benchmark
+uv run python examples/shop.py         # the example app
+uv run python benchmarks/history.py    # inlay against the history db, now and at past transactions
 ```
 
 ## Notes
