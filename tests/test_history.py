@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import pytest
 
 import inlay.history
-from inlay import AlreadyExists, BrokenRef, Missing, Ref, StoreError, entity, key
+from inlay import AlreadyExists, BrokenRef, Missing, Ref, entity, key
 from inlay.history.sql import delete_by_key_sql, select_sql
 from inlay.meta import meta
 from inlay.nodes import Compare, Filter, Table
@@ -150,17 +150,6 @@ def test_each_write_takes_the_next_transaction_and_times_never_go_back(db, path)
         conn.execute('UPDATE "inlay_tx" SET "at" = ?', (future,))
     db.update(replace(O1, total=20))
     assert transactions(path) == [(1, future), (2, future)]
-
-
-def test_no_transaction_takes_the_number_that_marks_a_current_version(db, path):
-    with closing(sqlite3.connect(path)) as conn, conn:
-        conn.execute('INSERT INTO "inlay_tx" VALUES (?, ?)', (CURRENT - 1, "2026-01-01T00:00:00+00:00"))
-    with pytest.raises(StoreError, match="every transaction number"):
-        db.update(replace(O1, total=20))
-    assert versions(path, "order") == [("o1", 1, CURRENT)]
-    # The refused transaction was rolled back, so another connection can take the write lock at once.
-    with closing(sqlite3.connect(path, timeout=0)) as conn:
-        conn.execute("BEGIN IMMEDIATE")
 
 
 def test_a_snapshot_reads_the_records_as_they_were(db):

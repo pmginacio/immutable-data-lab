@@ -46,11 +46,8 @@ CURRENT = 2**63 - 1
 _IS_CURRENT = f"{quote(_TX_TO)} = {CURRENT}"
 
 # The table of transactions, with the number and the UTC time of each.
-# The check keeps a transaction from taking the number that marks a current version.
 TX_TABLE = "inlay_tx"
-CREATE_TX_TABLE = (
-    f'CREATE TABLE {quote(TX_TABLE)} ("tx" INTEGER PRIMARY KEY CHECK ("tx" < {CURRENT}), "at" TEXT NOT NULL) STRICT'
-)
+CREATE_TX_TABLE = f'CREATE TABLE {quote(TX_TABLE)} ("tx" INTEGER PRIMARY KEY, "at" TEXT NOT NULL) STRICT'
 # Starts a transaction: the next number, at a time never earlier than the one before, even when the clock goes back.
 # The latest time is the one of the newest transaction, found by its number rather than by reading them all.
 NEXT_TX = (

@@ -9,7 +9,7 @@ from types import TracebackType
 from typing import Any, Self, overload
 
 from inlay.conditions import own_value
-from inlay.db import AlreadyExists, BrokenRef, Missing, SchemaMismatch, StoreError
+from inlay.db import AlreadyExists, BrokenRef, Missing, SchemaMismatch
 from inlay.functions import Aggregate, aggregate_of
 from inlay.history.sql import (
     BEGIN,
@@ -363,8 +363,6 @@ def _store_errors() -> Iterator[None]:
         yield
     except sqlite3.IntegrityError as e:
         match e.sqlite_errorname:
-            case "SQLITE_CONSTRAINT_CHECK":  # the only check is the one on transaction numbers
-                raise StoreError("the db has used every transaction number and cannot be written to") from e
             case "SQLITE_CONSTRAINT_UNIQUE":
                 raise AlreadyExists(str(e)) from e
             case "SQLITE_CONSTRAINT_FOREIGNKEY":

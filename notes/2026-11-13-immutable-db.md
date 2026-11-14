@@ -96,7 +96,7 @@ SQLite has no materialized views.
 
 ### Transactions
 
-A table `inlay_tx (tx INTEGER PRIMARY KEY CHECK (tx < MAX), at TEXT NOT NULL)` numbers the transactions.
+A table `inlay_tx (tx INTEGER PRIMARY KEY, at TEXT NOT NULL)` numbers the transactions.
 Each top-level transaction inserts a row right after `BEGIN IMMEDIATE`, and its writes use that number; a savepoint inside it shares it.
 `db.tx` and `as_of` only see committed transactions: an open one can still change, and after a rollback the next transaction reuses its number.
 A transaction that changes nothing, such as a read-only `db.transaction()` block or a `clear` that matches no record, still takes a number.
@@ -105,9 +105,8 @@ That is harmless: no version starts or ends at it, so a snapshot at it shows the
 SQLite's clock has milliseconds, so `as_of(time)` counts a transaction in the same millisecond as at or before it.
 `as_of` compares times with `julianday`, which reads both SQLite's times and Python's, whose digits of a second differ.
 
-The largest integer marks a current version, so a transaction must never get that number.
-The `CHECK` on the table refuses it; the db then stays readable and refuses writes.
-At a million transactions a second it would take about 290,000 years to get there.
+The largest integer marks a current version, so the transaction that got that number would leave versions that look current forever.
+Nothing refuses it: at a million transactions a second it would take about 290,000 years to get there.
 
 ### API
 
