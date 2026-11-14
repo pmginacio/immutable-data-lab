@@ -41,24 +41,25 @@ def quote(name: str) -> str:
 # The columns that every table of versions has: the transaction where a version starts, and where it ends.
 _TX_FROM = "tx_from"
 _TX_TO = "tx_to"
-# The `tx_to` of a version that is still current. A transaction never gets this number.
+# The `tx_to` of a version that is still current, far larger than any transaction number in practice.
 CURRENT = 2**63 - 1
 _IS_CURRENT = f"{quote(_TX_TO)} = {CURRENT}"
 
 # The table of transactions, with the number and the UTC time of each.
 TX_TABLE = "inlay_tx"
-CREATE_TX_TABLE = f'CREATE TABLE {quote(TX_TABLE)} ("tx" INTEGER PRIMARY KEY, "at" TEXT NOT NULL) STRICT'
+_TXS, _TX, _AT = quote(TX_TABLE), quote("tx"), quote("at")
+CREATE_TX_TABLE = f"CREATE TABLE {_TXS} ({_TX} INTEGER PRIMARY KEY, {_AT} TEXT NOT NULL) STRICT"
 # Starts a transaction: the next number, at a time never earlier than the one before, even when the clock goes back.
 # The latest time is the one of the newest transaction, found by its number rather than by reading them all.
 NEXT_TX = (
-    f"INSERT INTO {quote(TX_TABLE)} (\"at\") SELECT max(strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now'), "
-    f"coalesce((SELECT \"at\" FROM {quote(TX_TABLE)} ORDER BY \"tx\" DESC LIMIT 1), ''))"
+    f"INSERT INTO {_TXS} ({_AT}) SELECT max(strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now'), "
+    f"coalesce((SELECT {_AT} FROM {_TXS} ORDER BY {_TX} DESC LIMIT 1), ''))"
 )
-LATEST_TX = f'SELECT coalesce(max("tx"), 0) FROM {quote(TX_TABLE)}'
+LATEST_TX = f"SELECT coalesce(max({_TX}), 0) FROM {_TXS}"
 # julianday reads both SQLite's times and Python's, which differ in their digits of a second.
-TX_AT = f'{LATEST_TX} WHERE julianday("at") <= julianday(?)'
+TX_AT = f"{LATEST_TX} WHERE julianday({_AT}) <= julianday(?)"
 # Every top-level transaction adds its row first and holds the write lock, so the largest number is its own.
-_THIS_TX = f'(SELECT max("tx") FROM {quote(TX_TABLE)})'
+_THIS_TX = f"(SELECT max({_TX}) FROM {_TXS})"
 
 
 def create_table_sql(m: EntityMeta) -> str:
