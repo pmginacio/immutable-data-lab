@@ -231,7 +231,11 @@ class Db:
         return self._conn.execute(LATEST_TX).fetchone()[0]
 
     def as_of(self, at: int | datetime) -> Snapshot:
-        """The db as it was at transaction `at`, or at the last transaction at or before the time `at`."""
+        """The db as it was at transaction `at`, or at the last transaction at or before the time `at`.
+
+        Transaction times come from SQLite's clock, to the millisecond,
+        so a transaction in the same millisecond as the time `at` counts as at or before it.
+        """
         if isinstance(at, datetime):
             if at.tzinfo is None:
                 raise ValueError("as_of needs a datetime with a timezone, because transaction times are in UTC")

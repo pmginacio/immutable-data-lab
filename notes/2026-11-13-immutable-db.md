@@ -91,12 +91,14 @@ SQLite has no materialized views.
 
 ### Transactions
 
-A table `inlay_tx (tx INTEGER PRIMARY KEY, at TEXT NOT NULL)` numbers the write transactions.
-Each write transaction inserts a row under `BEGIN IMMEDIATE` and uses its number.
-`at` is the UTC time, stored as the larger of now and the previous `at`, so times never go backwards when the clock does.
+A table `inlay_tx (tx INTEGER PRIMARY KEY CHECK (tx < MAX), at TEXT NOT NULL)` numbers the transactions.
+Each top-level transaction inserts a row right after `BEGIN IMMEDIATE`, and its writes use that number; a savepoint inside it shares it.
+`at` is the UTC time from SQLite's own clock, stored as the larger of now and the previous `at`, so times never go backwards when the clock does.
+SQLite's clock has milliseconds, so `as_of(time)` counts a transaction in the same millisecond as at or before it.
+`as_of` compares times with `julianday`, which reads both SQLite's times and Python's, whose digits of a second differ.
 
 The largest integer marks a current version, so a transaction must never get that number.
-The one place that hands out numbers refuses it; the db then stays readable and refuses writes.
+The `CHECK` on the table refuses it; the db then stays readable and refuses writes.
 At a million transactions a second it would take about 290,000 years to get there.
 
 ### API

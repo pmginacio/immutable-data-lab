@@ -52,9 +52,10 @@ CREATE_TX_TABLE = (
     f'CREATE TABLE {quote(TX_TABLE)} ("tx" INTEGER PRIMARY KEY CHECK ("tx" < {CURRENT}), "at" TEXT NOT NULL) STRICT'
 )
 # Starts a transaction: the next number, at a time never earlier than the one before, even when the clock goes back.
+# The latest time is the one of the newest transaction, found by its number rather than by reading them all.
 NEXT_TX = (
-    f"INSERT INTO {quote(TX_TABLE)} (\"at\") "
-    f"SELECT max(strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now'), coalesce(max(\"at\"), '')) FROM {quote(TX_TABLE)}"
+    f"INSERT INTO {quote(TX_TABLE)} (\"at\") SELECT max(strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now'), "
+    f"coalesce((SELECT \"at\" FROM {quote(TX_TABLE)} ORDER BY \"tx\" DESC LIMIT 1), ''))"
 )
 LATEST_TX = f'SELECT coalesce(max("tx"), 0) FROM {quote(TX_TABLE)}'
 # julianday reads both SQLite's times and Python's, which differ in their digits of a second.
