@@ -5,6 +5,7 @@ from datetime import UTC, date, datetime, timedelta, timezone
 import pytest
 
 import inlay
+import inlay.datoms
 import inlay.history
 from inlay import AlreadyExists, BrokenRef, Missing, Ref, entity, key
 
@@ -41,8 +42,8 @@ class Everything:
     day: date
 
 
-# Every write test also runs against the history experiment, which must behave the same for the current data.
-@pytest.fixture(params=[inlay.open, inlay.history.open], ids=["inlay", "history"])
+# Every write test also runs against the history experiments, which must behave the same for the current data.
+@pytest.fixture(params=[inlay.open, inlay.history.open, inlay.datoms.open], ids=["inlay", "history", "datoms"])
 def open_db(request):
     return request.param
 

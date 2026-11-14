@@ -4,6 +4,7 @@ from contextlib import closing
 import pytest
 
 import inlay
+import inlay.datoms
 import inlay.history
 from inlay import Ref, SchemaMismatch, entity, key
 
@@ -59,8 +60,8 @@ def test_open_creates_tables_and_indexes(tmp_path):
         assert conn.execute("PRAGMA journal_mode").fetchone() == ("wal",)
 
 
-# These also run against the history experiment, which checks its stored tables the same way.
-@pytest.fixture(params=[inlay.open, inlay.history.open], ids=["inlay", "history"])
+# These also run against the history experiments, which check their stored tables the same way.
+@pytest.fixture(params=[inlay.open, inlay.history.open, inlay.datoms.open], ids=["inlay", "history", "datoms"])
 def open_db(request):
     return request.param
 
@@ -92,5 +93,5 @@ def test_changed_class_raises_and_changes_nothing(open_db, tmp_path):
 
 
 def test_ref_target_must_be_opened_too(open_db, tmp_path):
-    with pytest.raises(TypeError, match=r"not passed to inlay(\.history)?\.open: Order.customer -> Customer"):
+    with pytest.raises(TypeError, match=r"not passed to inlay(\.history|\.datoms)?\.open: Order.customer -> Customer"):
         open_db([Order], path=tmp_path / "shop.db")

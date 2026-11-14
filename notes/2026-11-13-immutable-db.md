@@ -17,6 +17,7 @@ SQLite in WAL mode already gives a read transaction a fixed snapshot, which woul
 ## Where it lives
 
 In the same repo and package, as `src/inlay/history/`, with its own `db.py` and `sql.py`.
+The datoms version starts as a copy of it in `src/inlay/datoms/`.
 `entity`, `meta`, `nodes`, `conditions`, `functions` and `types` describe classes and conditions, know nothing about storage, and are imported from inlay.
 A branch was not chosen, because the two versions should run the same read tests side by side.
 
