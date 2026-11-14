@@ -123,20 +123,21 @@ def add_sql(m: EntityMeta) -> str:
 
 def update_sql(m: EntityMeta) -> str:
     """Adds the datoms of a record from the values of its fields, except those that are its fields' values already."""
-    same = _newest("added AND v IS new.column2", _text(m.table), _param(m, m.key), "new.column1")
+    same = _newest("added AND v IS new.v", _text(m.table), _param(m, m.key), "new.a")
     return _write_sql(m, f"NOT coalesce({same}, 0)")
 
 
 def _write_sql(m: EntityMeta, where: str) -> str:
-    """Adds a datom for each field of a record whose field name and value, `new.column1` and `new.column2`, meet `where`.
+    """Adds a datom for each field `new.a` of a record, with value `new.v`, that meets `where`.
 
     It takes the values of the record's fields in order.
     """
     values = ", ".join(f"({_text(f.name)}, {_param(m, f)})" for f in m.fields)
+    # The WITH goes after INSERT, because sqlite3 reports no row count for a statement that starts with WITH.
     return f"""
         INSERT INTO {_DATOMS} ({_DATOM_COLUMNS})
-        SELECT {_text(m.table)}, {_param(m, m.key)}, new.column1, new.column2, {_THIS_TX}, 1
-        FROM (VALUES {values}) AS new
+        WITH new(a, v) AS (VALUES {values})
+        SELECT {_text(m.table)}, {_param(m, m.key)}, new.a, new.v, {_THIS_TX}, 1 FROM new
         WHERE {where}
         {_UPSERT}"""
 
@@ -171,10 +172,12 @@ def _retract_sql(m: EntityMeta, where: str) -> str:
     rows, _ = _rows_sql(m, None)  # the current records take no parameters
     names = ", ".join(f"({_text(f.name)})" for f in m.fields)
     value = " ".join(f"WHEN {_text(f.name)} THEN r.{_column(f)}" for f in m.fields)
+    # `where` names fields without a table, and no field starts with an underscore, so `_name` cannot clash.
     return f"""
         INSERT INTO {_DATOMS} ({_DATOM_COLUMNS})
-        SELECT {_text(m.table)}, r.{_column(m.key)}, f.column1, CASE f.column1 {value} END, {_THIS_TX}, 0
-        FROM ({rows}) AS r, (VALUES {names}) AS f
+        WITH f(_name) AS (VALUES {names})
+        SELECT {_text(m.table)}, r.{_column(m.key)}, f._name, CASE f._name {value} END, {_THIS_TX}, 0
+        FROM ({rows}) AS r, f
         WHERE {where}
         {_UPSERT}"""
 
