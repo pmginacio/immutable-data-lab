@@ -138,6 +138,8 @@ def history_reads(open_db: Callable[..., HistoryDb], path: Path, w: Workload) ->
             times = {name: conn.execute(at, (tx,)).fetchone()[0] for name, tx in points.items()}
         for name, tx in points.items():
             snapshot = db.as_of(tx)
+            # The datoms version fills a table for the snapshot on its first read, which the best of three would hide.
+            results[f"at {name} transaction: first read, len"] = once(lambda s=snapshot: len(s[Order]))
             results |= reads(lambda s=snapshot: s[Order], w, f"at {name} transaction")
         for name, at in times.items():
             when = datetime.fromtimestamp(at / 1000, UTC)

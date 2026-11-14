@@ -391,7 +391,7 @@ Step B would help filters on declared indexes only.
 Loading all records, `len`, sorting and aggregates would still rebuild the class and keep growing with history.
 So step B is set aside for a current table, below.
 
-### Next: a current table
+### A current table
 
 Nothing in the datoms table marks which datom of a field is the latest, so every reader works it out, at a cost that grows with history.
 Someone has to record what is current: either the reader searches for it, or the writer marks it.
@@ -410,28 +410,63 @@ The ideas looked at and set aside:
 
 The design:
 
-- A second table, `_inlay_current(class, e, a, v, tx)`, with primary key `(class, e, a)`, holds the latest added datom of each record and field.
-- Every write keeps it in step: an update upserts the fields that changed, and a removal deletes the record's rows.
-  `tx` is not in its key, so replacing a value changes the row in place, and only an index on that field's value moves.
+- A second table, `_inlay_current(class, e, a, v, added)`, with primary key `(class, e, a)`, holds the latest datom of each record and field, retractions included, without its transaction.
+  A removed record keeps its rows there with `added` false, so the table grows with the records ever stored, not with versions.
+- Every write is one SELECT of rows, put into both tables by two upserts: the datoms of this transaction, then the current rows.
+  The SELECT reads only the current table, which the first upsert does not change, so both pick the same rows.
+  `tx` is not in the current table's key, so replacing a value changes the row in place, and only an index on that field's value moves.
   In the history db, ending a version moves its entry in every index of the class, because a version is a whole row.
+- The two statements run record by record, not with `executemany`, which would run the first for every record before the second.
+  The same key twice in one call would then be checked against the same old value: `update` with totals 20 and 10, on a record at 10, would skip the 10.
+- Triggers would keep the current table in step without the second statement, but they were not chosen, because they are not visible in the code.
 - The datoms table stays as it is, written only by inserts, for `as_of` and history.
+- Every check that searched for the newest datom reads the current table instead: whether a key is stored, whether a field changed, the values a retraction keeps, and the references.
+  The partial index of each `Ref` field moves to the current table.
 - Reads of the present compile to one SQL shape over the current table, grouped by `e` into rows.
-  Loading all orders reads one row per record and field, whatever the number of versions.
-- `as_of(T)` builds a temporary table `_inlay_at_<T>` of the same shape, with every class at T, from the datoms, and its reads run the same SQL over it.
-  - It is built when `as_of` is called, for every class, with `CREATE TEMP TABLE IF NOT EXISTS`, so snapshots at the same T share it.
+- A snapshot reads a temporary table, `temp._inlay_at(at_tx, class, e, a, v, added)`, the current table as it was at each transaction a snapshot read, with the same SQL and `at_tx = ?`.
+  - It is filled at T from the datoms on the first read at T on the connection, and snapshots at the same T share it.
+  - Before each read at T, a query checks that it has rows at T, and fills it if not, so a fill that a rollback undid is made again.
+    Filling inside the same statement as the check made SQLite walk the datoms on every read.
   - SQLite drops it when the connection closes, so there is no cleanup code and no state in Python.
-  - A snapshot can still be taken inside a transaction: it reads only datoms with `tx <= T`, which are committed, and if the transaction rolls back, the temporary table goes with it and the next `as_of(T)` builds it again.
-  - A get on a fresh snapshot reads the table built by `as_of`.
-- Indexes on the values of declared fields, which step B had on the datoms table, go on the current table.
+  - It is temporary because each connection has its own temporary tables; a current table in temporary storage would miss other connections' writes, while the past never changes.
+  - Only a T with no datoms at all up to it has no rows, and filling it again reads nothing, through the `tx` index.
+- Indexes on the values of declared fields are left out for now; they would go on the current table.
 
 What it costs:
 
 - Each changed field is written twice, to the datoms table and to the current table.
 - The file holds a copy of the current data.
-- `as_of` costs a full rebuild at T, once per connection for each T, where it now takes 0.03 ms.
+- The first read on a snapshot fills it: a rebuild of every class at T, which reads every datom up to T.
 
-To check: that `as_of(db.tx)` inside an open transaction still finds the last committed transaction.
-To measure: an update round, loading all orders, a filter, and `as_of`, at 10 and 20 versions, against step A.
+#### Benchmark
+
+Datoms with the current table, against step A, for the same 20,000 orders updated 10 and 20 times.
+
+| | history, 10 | step A, 10 | current, 10 | history, 20 | step A, 20 | current, 20 |
+|---|---|---|---|---|---|---|
+| add everything | 152 ms | 1,141 ms | 650 ms | 146 ms | 1,009 ms | 650 ms |
+| update all orders, one round | 1,143 ms | 661 ms | 348 ms | 1,166 ms | 720 ms | 395 ms |
+| 1,000 updates of one order | 258 ms | 139 ms | 123 ms | 280 ms | 121 ms | 132 ms |
+| remove 1,000 orders | 132 ms | 147 ms | 199 ms | 137 ms | 164 ms | 217 ms |
+| load all orders, now | 39 ms | 379 ms | 61 ms | 40 ms | 560 ms | 61 ms |
+| a filter, now | under 0.5 ms | about 300 ms | 22 to 40 ms | under 0.5 ms | about 530 ms | 24 to 36 ms |
+| 2,000 gets, now | 44 ms | 112 ms | 77 ms | 45 ms | 122 ms | 73 ms |
+| first read on a snapshot, at the first, a middle and the latest transaction | 7, 3, 0.5 ms | | 128, 307, 396 ms | 12, 6, 0.5 ms | | 205, 497, 721 ms |
+| a filter on a snapshot, after the first read | 4 to 19 ms | about 130 to 330 ms | 37 to 44 ms | 4 to 33 ms | about 150 to 550 ms | 34 to 42 ms |
+| file size | 62 MB | 41 MB | 47 MB | 112 MB | 67 MB | 73 MB |
+
+Reads of the present no longer grow with history: loading all orders takes 61 ms at 10 and at 20 versions, against 37 ms in inlay.
+Filters, sorting and `len` still build every record of the class before they filter, so they cost 22 to 42 ms, 50 to 630 times inlay's time, but the same at any number of versions.
+An index on the current table, with step B's narrowing of filters, would take that further.
+
+Updates are faster than step A's, and three times faster than the history db's, because the checks read one row of the current table instead of searching the datoms.
+Adding is faster for the same reason, but still four times the history db's.
+Removing is slower than step A's: each retraction is now two statements, and it builds the class's current records to find the matching ones.
+
+A snapshot's first read pays the rebuild at T, and it costs more for a recent T, because it reads every datom up to T; that is the reverse of the history db, whose past reads cost more the older they are.
+After it, a snapshot reads like the present, at about the same cost for any T.
+
+The current table adds 6 MB to the file.
 
 ## How to compare them
 
