@@ -447,5 +447,5 @@ uv run python examples/shop.py     # the example app
 - [`notes/2026-11-11-sales-example-learnings.md`](notes/2026-11-11-sales-example-learnings.md) is what writing the sales example taught us about inlay, and the ideas it suggests.
 - [`notes/2026-11-13-migrations.md`](notes/2026-11-13-migrations.md) is the design of `migrate` and `rename`, and the discussion that led to it.
 - [`notes/2026-11-13-roadmap.md`](notes/2026-11-13-roadmap.md) is what is open and what comes next.
-- [`notes/2026-11-13-immutable-db.md`](notes/2026-11-13-immutable-db.md) is the discussion of an immutable, append-only db and a db of facts, as experiments next to inlay.
+- [`notes/2026-11-13-immutable-db.md`](notes/2026-11-13-immutable-db.md) is the design of the history db, `inlay.history`: one table of versions per class, and the plans for schema changes and a db of facts.
 - [`notes/2026-11-10-immutable-data-and-databases.md`](notes/2026-11-10-immutable-data-and-databases.md) is the background: immutable data, FP style, and database design in Python.
