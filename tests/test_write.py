@@ -118,6 +118,14 @@ def test_update_replaces_or_inserts(db):
     assert db[Customer].get(ana.id) == replace(ana, name="Ana Maria")
 
 
+def test_update_adds_back_a_removed_record_with_the_same_values(db):
+    ana = Customer(name="Ana")
+    db.add(ana)
+    db.remove(ana)
+    db.update(ana)
+    assert db[Customer].get(ana.id) == ana
+
+
 def test_remove_only_equal_objects(db):
     ana = Customer(name="Ana")
     db.add(ana)
