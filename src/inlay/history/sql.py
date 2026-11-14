@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from inlay.functions import Aggregate
@@ -45,19 +46,24 @@ _TX_TO = "tx_to"
 CURRENT = 2**63 - 1
 _IS_CURRENT = f"{quote(_TX_TO)} = {CURRENT}"
 
-# The table of transactions, with the number and the UTC time of each.
+# The table of transactions, with the number and the time of each, in whole milliseconds since 1970 in UTC.
 TX_TABLE = "inlay_tx"
 _TXS, _TX, _AT = quote(TX_TABLE), quote("tx"), quote("at")
-CREATE_TX_TABLE = f"CREATE TABLE {_TXS} ({_TX} INTEGER PRIMARY KEY, {_AT} TEXT NOT NULL) STRICT"
+CREATE_TX_TABLE = f"CREATE TABLE {_TXS} ({_TX} INTEGER PRIMARY KEY, {_AT} INTEGER NOT NULL) STRICT"
 # Starts a transaction: the next number, at a time never earlier than the one before, even when the clock goes back.
 # The latest time is the one of the newest transaction, found by its number rather than by reading them all.
+# SQLite's clock has milliseconds, and round undoes the float error of turning its seconds into milliseconds.
 NEXT_TX = (
-    f"INSERT INTO {_TXS} ({_AT}) SELECT max(strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now'), "
-    f"coalesce((SELECT {_AT} FROM {_TXS} ORDER BY {_TX} DESC LIMIT 1), ''))"
+    f"INSERT INTO {_TXS} ({_AT}) SELECT max(CAST(round(unixepoch('now', 'subsec') * 1000) AS INTEGER), "
+    f"coalesce((SELECT {_AT} FROM {_TXS} ORDER BY {_TX} DESC LIMIT 1), 0))"
 )
 LATEST_TX = f"SELECT coalesce(max({_TX}), 0) FROM {_TXS}"
-# julianday reads both SQLite's times and Python's, which differ in their digits of a second.
-TX_AT = f"{LATEST_TX} WHERE julianday({_AT}) <= julianday(?)"
+TX_AT = f"{LATEST_TX} WHERE {_AT} <= ?"
+
+
+def tx_time(at: datetime) -> int:
+    """`at`, which has a timezone, in the unit of the stored transaction times, cut to the millisecond as SQLite's are."""
+    return (at - datetime(1970, 1, 1, tzinfo=UTC)) // timedelta(milliseconds=1)
 # Every top-level transaction adds its row first and holds the write lock, so the largest number is its own.
 _THIS_TX = f"(SELECT max({_TX}) FROM {_TXS})"
 

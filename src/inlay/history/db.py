@@ -33,6 +33,7 @@ from inlay.history.sql import (
     delete_equal_sql,
     insert_sql,
     select_sql,
+    tx_time,
     version_index_sqls,
 )
 from inlay.meta import EntityMeta, meta
@@ -242,7 +243,7 @@ class Db:
         if isinstance(at, datetime):
             if at.tzinfo is None:
                 raise ValueError("as_of needs a datetime with a timezone, because transaction times are in UTC")
-            tx = min(self._conn.execute(TX_AT, (to_sql(at),)).fetchone()[0], self.tx)
+            tx = min(self._conn.execute(TX_AT, (tx_time(at),)).fetchone()[0], self.tx)
         elif not 0 <= at <= self.tx:
             raise ValueError(f"there is no committed transaction {at}; the latest is {self.tx}")
         else:

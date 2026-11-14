@@ -1,13 +1,13 @@
 import sqlite3
 from contextlib import closing
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
 import inlay.history
 from inlay import AlreadyExists, BrokenRef, Missing, Ref, entity, key
-from inlay.history.sql import delete_by_key_sql, select_sql
+from inlay.history.sql import delete_by_key_sql, select_sql, tx_time
 from inlay.meta import meta
 from inlay.nodes import Compare, Filter, Table
 
@@ -145,7 +145,7 @@ def test_updating_a_record_that_others_refer_to_leaves_them_alone(db, path):
 
 
 def test_each_write_takes_the_next_transaction_and_times_never_go_back(db, path):
-    future = "2999-01-01T00:00:00+00:00"
+    future = tx_time(datetime(2999, 1, 1, tzinfo=UTC))
     with closing(sqlite3.connect(path)) as conn, conn:
         conn.execute('UPDATE "inlay_tx" SET "at" = ?', (future,))
     db.update(replace(O1, total=20))
@@ -189,10 +189,12 @@ def test_as_of_a_time_reads_the_last_transaction_at_or_before_it(db, path):
     with closing(sqlite3.connect(path)) as conn, conn:
         conn.executemany(
             'UPDATE "inlay_tx" SET "at" = ? WHERE "tx" = ?',
-            [("2026-01-01T00:00:00+00:00", 1), ("2026-02-01T00:00:00+00:00", 2)],
+            [(tx_time(datetime(2026, 1, 1, tzinfo=UTC)), 1), (tx_time(datetime(2026, 2, 1, tzinfo=UTC)), 2)],
         )
     assert [o.total for o in db.as_of(datetime(2026, 1, 15, tzinfo=UTC))[Order]] == [10]
     assert [o.total for o in db.as_of(datetime(2026, 2, 1, tzinfo=UTC))[Order]] == [20]
+    # The same moment as 2026-02-01 00:00 UTC, two hours ahead.
+    assert [o.total for o in db.as_of(datetime(2026, 2, 1, 2, tzinfo=timezone(timedelta(hours=2))))[Order]] == [20]
     assert list(db.as_of(datetime(2025, 1, 1, tzinfo=UTC))[Order]) == []
 
 
