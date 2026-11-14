@@ -244,8 +244,8 @@ class Db:
             if at.tzinfo is None:
                 raise ValueError("as_of needs a datetime with a timezone, because transaction times are in UTC")
             tx = self._conn.execute(TX_AT, (tx_time(at),)).fetchone()[0]
-        elif not 0 <= at <= self.tx:
-            raise ValueError(f"there is no committed transaction {at}; the latest is {self.tx}")
+        elif not 0 <= at <= (latest := self.tx):
+            raise ValueError(f"there is no committed transaction {at}; the latest is {latest}")
         else:
             tx = at
         return Snapshot(self._conn, self._reading, self._metas, tx)
@@ -393,6 +393,8 @@ def open(entities: Iterable[type], *, path: str | os.PathLike[str] = DEFAULT_PAT
         _execute(conn, (*CONNECTION_SETUP, BEGIN))
         tables = dict(conn.execute(LIST_TABLES))
         _check_tables(metas.values(), tables)
+        if tables.get(TX_TABLE, CREATE_TX_TABLE) != CREATE_TX_TABLE:
+            raise SchemaMismatch(f"table {TX_TABLE!r} is not the history db's table of transactions")
         create_tx = [CREATE_TX_TABLE] if TX_TABLE not in tables else []
         create_tables = [create_table_sql(m) for m in metas.values() if m.table not in tables]
         create_indexes = [create_index_sql(m, i) for m in metas.values() for i in m.indexes]

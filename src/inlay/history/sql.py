@@ -128,7 +128,7 @@ def _live_def(f: FieldMeta) -> str:
         f"{quote(_live(f))} {SQL_TYPES[f.py_type]} GENERATED ALWAYS AS "
         f"(CASE WHEN {_IS_CURRENT} THEN {_column(f)} END) VIRTUAL"
     )
-    if f.target is None:  # the key
+    if f.target is None:  # the key, the only other field that gets a live column
         return sql + " UNIQUE"
     target = meta(f.target)
     # Checked at commit, so the order of writes inside a transaction does not matter.

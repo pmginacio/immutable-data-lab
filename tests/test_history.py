@@ -11,6 +11,7 @@ from inlay.history.sql import CURRENT, delete_by_key_sql, select_sql, tx_time
 from inlay.meta import meta
 from inlay.nodes import Compare, Filter, Table
 
+
 @entity
 class Customer:
     id: str = key()
