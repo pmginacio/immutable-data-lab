@@ -67,6 +67,12 @@ def test_values_round_trip(db):
     assert db[Everything].get(e.id) == e
 
 
+def test_an_int_in_a_float_field_reads_back_as_a_float(db):
+    e = Everything(i=1, f=2, s="x", b=b"", flag=True, at=datetime(2026, 1, 2, tzinfo=UTC), day=date(2026, 1, 2))
+    db.add(e)
+    assert type(db[Everything].get(e.id).f) is float
+
+
 def test_aware_datetimes_compare_by_moment_whatever_their_offset(db):
     def at(moment: datetime) -> Everything:
         return Everything(i=1, f=1.0, s="", b=b"", flag=False, at=moment, day=date(2026, 1, 1))

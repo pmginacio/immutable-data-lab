@@ -14,6 +14,7 @@ SQL_TYPES: dict[type, str] = {
 
 _FROM_SQL: dict[type, Callable[[Any], object]] = {
     bool: bool,
+    float: float,  # a column without a type keeps an int stored for a float field
     datetime: datetime.fromisoformat,
     date: date.fromisoformat,
 }
