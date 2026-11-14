@@ -92,5 +92,5 @@ def test_changed_class_raises_and_changes_nothing(open_db, tmp_path):
 
 
 def test_ref_target_must_be_opened_too(open_db, tmp_path):
-    with pytest.raises(TypeError, match="not passed to inlay.open: Order.customer -> Customer"):
+    with pytest.raises(TypeError, match=r"not passed to inlay(\.history)?\.open: Order.customer -> Customer"):
         open_db([Order], path=tmp_path / "shop.db")

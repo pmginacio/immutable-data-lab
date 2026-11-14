@@ -325,7 +325,7 @@ def _meta_in(metas: Mapping[type, EntityMeta], cls: type) -> EntityMeta:
     try:
         return metas[cls]
     except KeyError:
-        raise KeyError(f"{cls.__name__} was not passed to inlay.open") from None
+        raise KeyError(f"{cls.__name__} was not passed to inlay.history.open") from None
 
 
 def _check_idle(reading: Counter[type], classes: Iterable[type]) -> None:
@@ -427,7 +427,7 @@ def _check_refs(metas: Mapping[type, EntityMeta]) -> None:
         if f.target is not None and f.target not in metas
     ]
     if dangling:
-        raise TypeError(f"Ref fields point to entities not passed to inlay.open: {', '.join(dangling)}")
+        raise TypeError(f"Ref fields point to entities not passed to inlay.history.open: {', '.join(dangling)}")
 
 
 def _check_tables(metas: Collection[EntityMeta], tables: Mapping[str, str]) -> None:

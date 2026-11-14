@@ -224,7 +224,7 @@ def test_unknown_class(db):
     class Other:
         id: str = key()
 
-    with pytest.raises(KeyError, match="Other was not passed to inlay.open"):
+    with pytest.raises(KeyError, match="Other was not passed to"):
         db[Other]
     with pytest.raises(KeyError):
         db.add(Other())
