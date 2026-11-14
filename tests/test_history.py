@@ -174,11 +174,12 @@ def test_a_snapshot_reads_related_records_at_the_same_transaction(db):
 
 def test_a_snapshot_aggregates_and_slices_at_its_transaction(db):
     db.add(Order(id="o2", customer="ana", total=5))
-    db.update(replace(O1, total=20))
+    db.update(replace(O1, total=20), replace(ANA, name="Ana B"))
     then = db.as_of(2)[Order]
     assert (len(then), then.sum(Order.total)) == (2, 15)
     assert then.aggregate_by(Order.customer, sum, Order.total) == {"ana": 15}
-    assert [o.id for o in then.sorted(key=Order.total)[:1].filter(Order.total > 0)] == ["o2"]
+    # A filter after a slice runs on a SELECT of the slice, and its relation must still read the customer at 2.
+    assert [o.id for o in then.sorted(key=Order.total)[:1].filter(Order.customer.name == "Ana")] == ["o2"]
 
 
 def test_as_of_a_time_reads_the_last_transaction_at_or_before_it(db, path):
@@ -220,8 +221,8 @@ def test_a_snapshot_inside_a_transaction_reads_the_last_committed_one(db):
 
 
 def test_writing_while_looping_over_a_snapshot_of_the_same_class_is_refused(db):
-    for _ in db.as_of(1)[Order]:
-        with pytest.raises(RuntimeError, match="changed during iteration"):
+    with pytest.raises(RuntimeError, match="Order changed during iteration"):
+        for _ in db.as_of(1)[Order]:
             db.update(replace(O1, total=20))
 
 
