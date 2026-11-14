@@ -18,7 +18,7 @@ from inlay.history.sql import (
     CREATE_TX_TABLE,
     LATEST_TX,
     LIST_TABLES,
-    NEXT_TX,
+    RECORD_TX,
     RELEASE,
     ROLLBACK,
     ROLLBACK_TO,
@@ -228,11 +228,11 @@ class Db:
 
     @property
     def tx(self) -> int:
-        """The number of the latest committed transaction, or 0 before the first write."""
-        latest = self._conn.execute(LATEST_TX).fetchone()[0]
-        # An open transaction has already taken the newest number, and no other connection can take one meanwhile.
-        # It is left out: its data can still change, and after a rollback the next transaction reuses its number.
-        return latest - 1 if self._conn.in_transaction else latest
+        """The number of the latest committed transaction, or 0 before the first write.
+
+        A transaction is only recorded as it commits, so one that is still open is never counted.
+        """
+        return self._conn.execute(LATEST_TX).fetchone()[0]
 
     def as_of(self, at: int | datetime) -> Snapshot:
         """The db as it was at transaction `at`, or at the last transaction at or before the time `at`.
@@ -243,7 +243,7 @@ class Db:
         if isinstance(at, datetime):
             if at.tzinfo is None:
                 raise ValueError("as_of needs a datetime with a timezone, because transaction times are in UTC")
-            tx = min(self._conn.execute(TX_AT, (tx_time(at),)).fetchone()[0], self.tx)
+            tx = self._conn.execute(TX_AT, (tx_time(at),)).fetchone()[0]
         elif not 0 <= at <= self.tx:
             raise ValueError(f"there is no committed transaction {at}; the latest is {self.tx}")
         else:
@@ -336,21 +336,19 @@ def _check_idle(reading: Counter[type], classes: Iterable[type]) -> None:
             raise RuntimeError(f"{cls.__name__} changed during iteration")
 
 
-# Each is: the statement that begins, the ones that open the body, the one that ends, and the ones that undo.
-# A new transaction takes the next transaction number, which the writes inside it use; a savepoint shares it.
+# A new transaction records itself, with its number and time, just before it commits; a savepoint is part of it.
 # ROLLBACK TO leaves the savepoint open, so it is released as well.
-_TOP_LEVEL = (BEGIN, NEXT_TX, COMMIT, ROLLBACK)
-_NESTED = (SAVEPOINT, (), RELEASE, (ROLLBACK_TO, RELEASE))
+_TOP_LEVEL = (BEGIN, (RECORD_TX, COMMIT), ROLLBACK)
+_NESTED = (SAVEPOINT, RELEASE, (ROLLBACK_TO, RELEASE))
 
 
 @contextmanager
 def _transaction(conn: sqlite3.Connection) -> Iterator[None]:
     """Runs a new transaction, or a savepoint inside an open one, so a failed call leaves nothing behind."""
-    begin, start, end, undo = _NESTED if conn.in_transaction else _TOP_LEVEL
+    begin, end, undo = _NESTED if conn.in_transaction else _TOP_LEVEL
     with _store_errors():
         _execute(conn, begin)
         try:
-            _execute(conn, start)
             yield
             _execute(conn, end)
         except BaseException:

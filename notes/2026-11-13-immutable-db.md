@@ -101,8 +101,9 @@ SQLite has no materialized views.
 ### Transactions
 
 A table `_inlay_tx (tx INTEGER PRIMARY KEY, at INTEGER NOT NULL)` numbers the transactions.
-Each top-level transaction inserts a row right after `BEGIN IMMEDIATE`, and its writes use that number; a savepoint inside it shares it.
-`db.tx` and `as_of` only see committed transactions: an open one can still change, and after a rollback the next transaction reuses its number.
+A top-level transaction's writes use the next number, one more than the largest recorded: it holds the write lock from `BEGIN IMMEDIATE`, so no other connection can take that number first.
+It records its row, with the number and the time, as the last step before `COMMIT`; a savepoint inside it is part of it.
+So the time is when the transaction commits, `db.tx` and `as_of` only ever see committed transactions, and a rollback leaves no row behind.
 A transaction that changes nothing, such as a read-only `db.transaction()` block or a `clear` that matches no record, still takes a number.
 That is harmless: no version starts or ends at it, so a snapshot at it shows the same data as one at the transaction before.
 `at` is the time from SQLite's own clock, `unixepoch('now', 'subsec')`, in whole milliseconds since 1970 in UTC.

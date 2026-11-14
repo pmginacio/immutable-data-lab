@@ -11,7 +11,7 @@ from inlay.history.sql import (
 from inlay.meta import meta
 
 CURRENT = "9223372036854775807"
-TX = '(SELECT max("tx") FROM "_inlay_tx")'
+TX = '(SELECT coalesce(max("tx"), 0) + 1 FROM "_inlay_tx")'
 
 
 @entity
