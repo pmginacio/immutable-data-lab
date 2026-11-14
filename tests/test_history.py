@@ -196,8 +196,12 @@ def test_as_of_a_time_reads_the_last_transaction_at_or_before_it(db, path):
     assert list(db.as_of(datetime(2025, 1, 1, tzinfo=UTC))[Order]) == []
 
 
-def test_as_of_now_reads_the_latest_transaction(db):
+def test_a_transaction_is_recorded_at_the_time_it_commits(db, path):
+    before = tx_time(datetime.now(UTC))
     db.update(replace(O1, total=20))
+    after = tx_time(datetime.now(UTC))
+    tx, at = transactions(path)[-1]
+    assert tx == 2 and before <= at <= after
     assert db.as_of(datetime.now(UTC)).tx == db.tx == 2
 
 
