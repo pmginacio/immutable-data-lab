@@ -108,8 +108,6 @@ That is harmless: no version starts or ends at it, so a snapshot at it shows the
 `at` is the time from SQLite's own clock, `unixepoch('now', 'subsec')`, in whole milliseconds since 1970 in UTC.
 It is stored as the larger of now and the previous `at`, so times never go backwards when the clock does.
 `as_of(time)` turns its time into the same milliseconds and compares numbers, so a transaction in the same millisecond counts as at or before it.
-The time is taken when a transaction begins, not when it commits, so `as_of` with a time during a long transaction includes it, although no reader could see its data before the commit.
-Transactions are short, and the order of transactions is right either way.
 In a SQLite shell, `datetime("at" / 1000, 'unixepoch')` shows a time as a date.
 
 The largest integer marks a current version, so the transaction that got that number would leave versions that look current forever.
