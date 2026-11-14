@@ -168,12 +168,13 @@ def _retract_sql(m: EntityMeta, where: str) -> str:
     Each retraction keeps the value it retracts, as in Datomic, taken from the rebuilt records,
     one row for each record and field.
     """
+    rows, _ = _rows_sql(m, None)  # the current records take no parameters
     names = ", ".join(f"({_text(f.name)})" for f in m.fields)
     value = " ".join(f"WHEN {_text(f.name)} THEN r.{_column(f)}" for f in m.fields)
     return f"""
         INSERT INTO {_DATOMS} ({_DATOM_COLUMNS})
         SELECT {_text(m.table)}, r.{_column(m.key)}, f.column1, CASE f.column1 {value} END, {_THIS_TX}, 0
-        FROM ({_rows_sql(m, None)}) AS r, (VALUES {names}) AS f
+        FROM ({rows}) AS r, (VALUES {names}) AS f
         WHERE {where}
         {_UPSERT}"""
 
@@ -211,31 +212,36 @@ def referenced_removal_sql(m: EntityMeta, f: FieldMeta, target: EntityMeta) -> s
         LIMIT 1"""
 
 
-def _rows_sql(m: EntityMeta, tx: int | None) -> str:
-    """A SELECT of the records of `m` at transaction `tx`, or of the current ones, rebuilt from their newest datoms.
+def _rows_sql(m: EntityMeta, tx: int | None) -> tuple[str, list[object]]:
+    """A SELECT of the records of `m` at transaction `tx`, or of the current ones, rebuilt from their newest datoms,
+    and its parameters.
 
     It groups only once, so SQLite can push a condition on the key down to the datoms of one record;
-    through a second grouping, a `get` would rebuild the whole class. With `tx`, it takes two parameters.
+    through a second grouping, a `get` would rebuild the whole class.
     """
-    at = "" if tx is None else " AND {}.tx <= ?"
+
+    def at(alias: str) -> str:
+        return "" if tx is None else f" AND {alias}.tx <= ?"
+
     newer = f"""
         SELECT 1 FROM {_DATOMS} AS n
         WHERE n.class = d.class
             AND n.e = d.e
             AND n.a = d.a
-            AND n.tx > d.tx{at.format('n')}"""
+            AND n.tx > d.tx{at('n')}"""
     fields = ", ".join(
         f"d.e AS {_column(f)}" if f.is_key else f"max(CASE d.a WHEN {_text(f.name)} THEN d.v END) AS {_column(f)}"
         for f in m.fields
     )
-    return f"""
+    sql = f"""
         SELECT
             {fields}
         FROM {_DATOMS} AS d
-        WHERE d.class = {_text(m.table)}{at.format('d')}
+        WHERE d.class = {_text(m.table)}{at('d')}
             AND NOT EXISTS ({newer})
         GROUP BY d.e
         HAVING max(CASE d.a WHEN {_text(m.key.name)} THEN d.added END)"""
+    return sql, [] if tx is None else [tx, tx]
 
 
 def _sql_op(op: CompareOp) -> str:
@@ -364,7 +370,8 @@ def _select(query: Query, tx: int | None) -> _Select:
     match query:
         case Table(cls):
             m = meta(cls)
-            return _Select(m, tx, f"({_rows_sql(m, tx)})", () if tx is None else (tx, tx))
+            sql, params = _rows_sql(m, tx)
+            return _Select(m, tx, f"({sql})", tuple(params))
         case Filter(source, cond):
             select = _open(_select(source, tx))
             return replace(select, where=(*select.where, cond))
