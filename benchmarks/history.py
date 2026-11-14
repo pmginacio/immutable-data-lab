@@ -1,7 +1,7 @@
-"""inlay and its history db side by side: the same writes and reads, and the history db's reads at past transactions.
+"""inlay and its two history experiments side by side: the same writes and reads, and the reads at past transactions.
 
 A third column runs the history db with its declared indexes the other way round, field first and `_tx_to` second,
-to compare the two orders without changing the code.
+to compare the two orders without changing the code. The last column is the datoms version.
 
 Run from the repository root:
 
@@ -25,6 +25,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import inlay
+import inlay.datoms
 import inlay.history
 from inlay import Ref, entity, key
 
@@ -89,7 +90,11 @@ def best(fn: Callable[[], object]) -> float:
     return min(once(fn) for _ in range(3))
 
 
-def write_all(db: inlay.Db | inlay.history.Db, w: Workload) -> dict[str, float]:
+type AnyDb = inlay.Db | inlay.history.Db | inlay.datoms.Db
+type HistoryDb = inlay.history.Db | inlay.datoms.Db
+
+
+def write_all(db: AnyDb, w: Workload) -> dict[str, float]:
     return {
         "add everything": once(lambda: db.add(*w.customers, *w.orders)),
         f"update all orders, mean of {len(w.rounds)} rounds": sum(once(lambda r=r: db.update(*r)) for r in w.rounds)
@@ -103,7 +108,9 @@ def write_all(db: inlay.Db | inlay.history.Db, w: Workload) -> dict[str, float]:
     }
 
 
-type Orders = Callable[[], inlay.RecordView[Order] | inlay.history.RecordView[Order]]
+type Orders = Callable[
+    [], inlay.RecordView[Order] | inlay.history.RecordView[Order] | inlay.datoms.RecordView[Order]
+]
 
 
 def reads(orders: Orders, w: Workload, when: str) -> dict[str, float]:
@@ -119,9 +126,9 @@ def reads(orders: Orders, w: Workload, when: str) -> dict[str, float]:
     }
 
 
-def history_reads(path: Path, w: Workload) -> dict[str, float]:
+def history_reads(open_db: Callable[..., HistoryDb], path: Path, w: Workload) -> dict[str, float]:
     """Reads now and at three past transactions, and `as_of` with the time of each."""
-    with inlay.history.open([Customer, Order], path=path) as db:
+    with open_db([Customer, Order], path=path) as db:
         results = reads(lambda: db[Order], w, "now")
         points = {"the first": 1, "a middle": 1 + len(w.rounds) // 2, "the latest": db.tx}
         with closing(sqlite3.connect(path)) as conn:
@@ -136,7 +143,7 @@ def history_reads(path: Path, w: Workload) -> dict[str, float]:
     return results
 
 
-def one_more_round(open_db: Callable[..., inlay.Db | inlay.history.Db], path: Path, w: Workload) -> dict[str, float]:
+def one_more_round(open_db: Callable[..., AnyDb], path: Path, w: Workload) -> dict[str, float]:
     with open_db([Customer, Order], path=path) as db:
         return {"one more update round, after the history": once(lambda: db.update(*w.extra_round))}
 
@@ -154,39 +161,50 @@ def size_mb(path: Path) -> float:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="inlay and its history db side by side.")
+    parser = argparse.ArgumentParser(description="inlay and its history experiments side by side.")
     parser.add_argument("--orders", type=int, default=20_000)
     parser.add_argument("--versions", type=int, default=10, help="rounds of updating every order")
     args = parser.parse_args()
     w = workload(args.orders, args.versions)
-    columns: dict[str, dict[str, float]] = {"inlay": {}, "history": {}, "history, field first": {}}
 
     with tempfile.TemporaryDirectory() as folder:
-        plain, history, flipped = (Path(folder) / name for name in ("inlay.db", "history.db", "flipped.db"))
+        plain, history, flipped, datoms = (
+            Path(folder) / name for name in ("inlay.db", "history.db", "flipped.db", "datoms.db")
+        )
+        columns = {"inlay": {}, "history": {}, "history, field first": {}, "datoms": {}}
         with inlay.open([Customer, Order], path=plain) as db:
             columns["inlay"] |= write_all(db, w) | reads(lambda: db[Order], w, "now")
-        with inlay.history.open([Customer, Order], path=history) as db:
-            columns["history"] |= write_all(db, w)
+        for name, open_db, path in (("history", inlay.history.open, history), ("datoms", inlay.datoms.open, datoms)):
+            with open_db([Customer, Order], path=path) as db:
+                columns[name] |= write_all(db, w)
         shutil.copy(history, flipped)  # closing the db wrote everything into the main file
         put_fields_first(flipped)
-        columns["history"] |= history_reads(history, w)
-        columns["history, field first"] |= history_reads(flipped, w)
-        for name, open_db, path in (("inlay", inlay.open, plain), ("history", inlay.history.open, history)):
+        runs = {
+            "inlay": (inlay.open, plain),
+            "history": (inlay.history.open, history),
+            "history, field first": (inlay.history.open, flipped),
+            "datoms": (inlay.datoms.open, datoms),
+        }
+        for name, (open_db, path) in runs.items():
+            if open_db is not inlay.open:
+                columns[name] |= history_reads(open_db, path, w)
+        for name, (open_db, path) in runs.items():
             columns[name] |= one_more_round(open_db, path, w)
-        columns["history, field first"] |= one_more_round(inlay.history.open, flipped, w)
-        sizes = {name: size_mb(path) for name, path in (("inlay", plain), ("history", history))}
+        sizes = {name: size_mb(path) for name, (_, path) in runs.items()}
 
     print(f"{args.orders} orders of {CUSTOMERS} customers, every order updated {args.versions} times")
     print(f"Python {sys.version.split()[0]}, SQLite {sqlite3.sqlite_version}; times in ms\n")
     labels = list(dict.fromkeys(label for results in columns.values() for label in results))
     width = max(map(len, labels)) + 2
-    print(" " * width + "".join(f"{name:>22}" for name in columns) + f"{'history / inlay':>17}")
+    ratios = ("history / inlay", "datoms / inlay")
+    print(" " * width + "".join(f"{name:>22}" for name in columns) + "".join(f"{r:>17}" for r in ratios))
     for label in labels:
         values = [results.get(label) for results in columns.values()]
         cells = "".join(f"{v:>22.2f}" if v is not None else f"{'':>22}" for v in values)
-        ratio = f"{values[1] / values[0]:>16.1f}x" if values[0] and values[1] else ""
-        print(f"{label:{width}}{cells}{ratio}")
-    print(f"\n{'file size, MB':{width}}{sizes['inlay']:>22.1f}{sizes['history']:>22.1f}")
+        base = values[0]
+        cells += "".join(f"{v / base:>16.1f}x" if base and v else f"{'':>17}" for v in (values[1], values[3]))
+        print(f"{label:{width}}{cells}")
+    print(f"\n{'file size, MB':{width}}" + "".join(f"{size:>22.1f}" for size in sizes.values()))
 
 
 if __name__ == "__main__":
