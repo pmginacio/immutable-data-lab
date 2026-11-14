@@ -95,13 +95,17 @@ def version_index_sqls(m: EntityMeta) -> list[str]:
     The key comes before `tx_to`, so finding a current version by key matches both columns,
     and SQLite chooses this index over `(tx_to, tx_from)` without needing statistics.
     SQLite needs an index that starts with the column of a foreign key, or a removal scans the referring table.
+    That index leaves out the NULLs of old versions, which the foreign key check never looks for.
     """
     indexes = [
         ([_TX_TO, _TX_FROM], [quote(_TX_TO), quote(_TX_FROM)]),
         ([m.key.name, _TX_TO], [_column(m.key), quote(_TX_TO)]),
-        *(([_live(f)], [quote(_live(f))]) for f in m.fields if f.target is not None),
     ]
-    return [_index_sql(m, names, columns) for names, columns in indexes]
+    lives = [_live(f) for f in m.fields if f.target is not None]
+    return [
+        *(_index_sql(m, names, columns) for names, columns in indexes),
+        *(_index_sql(m, [live], [quote(live)]) + f" WHERE {quote(live)} IS NOT NULL" for live in lives),
+    ]
 
 
 def _index_sql(m: EntityMeta, names: list[str], columns: list[str]) -> str:

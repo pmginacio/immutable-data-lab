@@ -160,6 +160,7 @@ Most reads are of the latest data, which is an exact match on `tx_to`, so `tx_to
   With `total` first, it would walk every version and discard the old ones.
 - `(tx_to, tx_from)` serves reading a whole class, now or at T.
 - `(live_<ref>)` for each `Ref`: SQLite needs an index that starts with the child column of a foreign key, or removing a record scans the referring table.
+  It is a partial index, `WHERE live_<ref> IS NOT NULL`, so old versions add nothing to it; the foreign key check only looks for real values.
   Today the declared index of a `Ref` does both jobs; here the declared index serves reads and this one serves the foreign key.
 - `(id, tx_to)` serves one record: its current version is an exact match on both columns, and a version at T is a range on `tx_to`.
   With `tx_from` second, as first built, a current version matched only on the key, and SQLite chose `(tx_to, tx_from)` instead, walking every current row to find one key.
