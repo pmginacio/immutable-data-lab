@@ -75,11 +75,6 @@ def test_an_update_keeps_the_old_version_and_reads_the_new_one(db, path):
     assert versions(path, "order") == [("o1", 1, 2), ("o1", 2, CURRENT)]
 
 
-def test_update_adds_a_record_that_is_not_stored(db):
-    db.update(Order(id="o2", customer="ana", total=5))
-    assert {o.id for o in db[Order]} == {"o1", "o2"}
-
-
 def test_the_same_key_twice_in_one_update_raises_and_changes_nothing(db):
     # Input is taken as given, and the unique live key refuses the second record, unlike inlay's upsert.
     with pytest.raises(AlreadyExists):
@@ -87,13 +82,18 @@ def test_the_same_key_twice_in_one_update_raises_and_changes_nothing(db):
     assert [o.total for o in db[Order]] == [10]
 
 
-def test_adding_a_key_that_is_current_raises(db):
-    with pytest.raises(AlreadyExists):
-        db.add(replace(O1, total=99))
-
-
-def test_removing_ends_the_current_version_and_keeps_it_stored(db, path):
-    db.remove(O1)
+@pytest.mark.parametrize(
+    "end",
+    [
+        lambda db: db.remove(O1),
+        lambda db: db.discard(O1),
+        lambda db: db[Order].delete("o1"),
+        lambda db: db[Order].clear(Order.id == "o1"),
+    ],
+    ids=["remove", "discard", "delete", "clear"],
+)
+def test_ending_a_record_keeps_its_version_stored(db, path, end):
+    end(db)
     assert len(db[Order]) == 0
     assert versions(path, "order") == [("o1", 1, 2)]
 
@@ -106,14 +106,6 @@ def test_ending_a_record_that_is_not_current_raises_and_changes_nothing(db, path
     with pytest.raises(Missing):
         write(db)
     assert versions(path, "order") == [("o1", 1, CURRENT)]
-
-
-def test_discard_and_delete_and_clear_end_current_versions(db):
-    db.add(Order(id="o2", customer="ana", total=5), Order(id="o3", customer="ana", total=50))
-    db.discard(replace(O1, total=99))  # not stored, so nothing happens
-    db[Order].delete("o1")
-    db[Order].clear(Order.total < 10)
-    assert [o.id for o in db[Order]] == ["o3"]
 
 
 def test_a_removed_key_can_be_added_again(db, path):

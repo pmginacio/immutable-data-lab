@@ -3,6 +3,7 @@ from dataclasses import replace
 import pytest
 
 import inlay
+import inlay.history
 from inlay import Ref, entity, key
 
 
@@ -30,9 +31,10 @@ ANA = Customer(id="ana", name="Ana", city="Lisbon")
 BOB = Customer(id="bob", name="Bob", city="Porto")
 
 
-@pytest.fixture
-def db(tmp_path):
-    with inlay.open([Customer, Order, Event], path=tmp_path / "shop.db") as db:
+# The history experiment shares the guard, so every iteration test also runs against it.
+@pytest.fixture(params=[inlay.open, inlay.history.open], ids=["inlay", "history"])
+def db(request, tmp_path):
+    with request.param([Customer, Order, Event], path=tmp_path / "shop.db") as db:
         db.add(ANA, BOB, Order(customer="ana", total=10))
         yield db
 

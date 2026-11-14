@@ -5,6 +5,7 @@ from datetime import UTC, date, datetime, timedelta, timezone
 import pytest
 
 import inlay
+import inlay.history
 from inlay import AlreadyExists, BrokenRef, Missing, Ref, entity, key
 
 
@@ -40,9 +41,15 @@ class Everything:
     day: date
 
 
+# Every write test also runs against the history experiment, which must behave the same for the current data.
+@pytest.fixture(params=[inlay.open, inlay.history.open], ids=["inlay", "history"])
+def open_db(request):
+    return request.param
+
+
 @pytest.fixture
-def db(tmp_path):
-    with inlay.open([Customer, Order, Category, Everything], path=tmp_path / "shop.db") as db:
+def db(open_db, tmp_path):
+    with open_db([Customer, Order, Category, Everything], path=tmp_path / "shop.db") as db:
         yield db
 
 
@@ -223,8 +230,8 @@ def test_unknown_class(db):
         db.add(Other())
 
 
-def test_closed_db(tmp_path):
-    with inlay.open([Customer], path=tmp_path / "shop.db") as db:
+def test_closed_db(open_db, tmp_path):
+    with open_db([Customer], path=tmp_path / "shop.db") as db:
         pass
     with pytest.raises(sqlite3.ProgrammingError):
         db[Customer].get("x")
