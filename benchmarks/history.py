@@ -1,7 +1,8 @@
 """inlay and its two history experiments side by side: the same writes and reads, and the reads at past transactions.
 
 A third column runs the history db with its declared indexes the other way round, field first and `_tx_to` second,
-to compare the two orders without changing the code. The last column is the datoms version.
+to compare the two orders without changing the code. The fourth column is the datoms version,
+and the last two give the history db's and the datoms version's times as multiples of inlay's.
 
 Run from the repository root:
 
@@ -23,6 +24,7 @@ from contextlib import closing
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import inlay
 import inlay.datoms
@@ -171,24 +173,24 @@ def main() -> None:
         plain, history, flipped, datoms = (
             Path(folder) / name for name in ("inlay.db", "history.db", "flipped.db", "datoms.db")
         )
-        columns = {"inlay": {}, "history": {}, "history, field first": {}, "datoms": {}}
-        with inlay.open([Customer, Order], path=plain) as db:
-            columns["inlay"] |= write_all(db, w) | reads(lambda: db[Order], w, "now")
-        for name, open_db, path in (("history", inlay.history.open, history), ("datoms", inlay.datoms.open, datoms)):
-            with open_db([Customer, Order], path=path) as db:
-                columns[name] |= write_all(db, w)
-        shutil.copy(history, flipped)  # closing the db wrote everything into the main file
-        put_fields_first(flipped)
-        runs = {
+        runs: dict[str, tuple[Callable[..., Any], Path]] = {
             "inlay": (inlay.open, plain),
             "history": (inlay.history.open, history),
             "history, field first": (inlay.history.open, flipped),
             "datoms": (inlay.datoms.open, datoms),
         }
+        columns: dict[str, dict[str, float]] = {name: {} for name in runs}
+        for name in ("inlay", "history", "datoms"):  # the field-first column is a copy of the history file
+            open_db, path = runs[name]
+            with open_db([Customer, Order], path=path) as db:
+                columns[name] |= write_all(db, w)
+                if name == "inlay":  # the history experiments read now in `history_reads`
+                    columns[name] |= reads(lambda: db[Order], w, "now")
+        shutil.copy(history, flipped)  # closing the db wrote everything into the main file
+        put_fields_first(flipped)
         for name, (open_db, path) in runs.items():
-            if open_db is not inlay.open:
+            if name != "inlay":
                 columns[name] |= history_reads(open_db, path, w)
-        for name, (open_db, path) in runs.items():
             columns[name] |= one_more_round(open_db, path, w)
         sizes = {name: size_mb(path) for name, (_, path) in runs.items()}
 
@@ -196,13 +198,15 @@ def main() -> None:
     print(f"Python {sys.version.split()[0]}, SQLite {sqlite3.sqlite_version}; times in ms\n")
     labels = list(dict.fromkeys(label for results in columns.values() for label in results))
     width = max(map(len, labels)) + 2
-    ratios = ("history / inlay", "datoms / inlay")
+    ratios = {"history / inlay": "history", "datoms / inlay": "datoms"}
     print(" " * width + "".join(f"{name:>22}" for name in columns) + "".join(f"{r:>17}" for r in ratios))
     for label in labels:
         values = [results.get(label) for results in columns.values()]
         cells = "".join(f"{v:>22.2f}" if v is not None else f"{'':>22}" for v in values)
-        base = values[0]
-        cells += "".join(f"{v / base:>16.1f}x" if base and v else f"{'':>17}" for v in (values[1], values[3]))
+        base = columns["inlay"].get(label)
+        for name in ratios.values():
+            v = columns[name].get(label)
+            cells += f"{v / base:>16.1f}x" if base and v else f"{'':>17}"
         print(f"{label:{width}}{cells}")
     print(f"\n{'file size, MB':{width}}" + "".join(f"{size:>22.1f}" for size in sizes.values()))
 
