@@ -302,10 +302,59 @@ What it costs:
 - One value column cannot hold values of different types under `STRICT`.
   It needs a table for each type, or an untyped column.
 - A condition on a field is a lookup of facts, and a condition through a relation is a join over facts.
-- The live columns of the history db should fit: a fact gets `tx_from` and `tx_to`, and a fact whose value is a reference goes in a table of its own, so that it can have a foreign key to the entity.
-  This was not tried.
 
-The datoms version would reuse the transaction numbers, the snapshots and the live columns of the history db, so the history db comes first.
+### Design
+
+It lives in `src/inlay/datoms/`, which starts as a copy of the history db.
+It keeps the history db's transaction numbers, `as_of` and snapshots, and the same API.
+
+Storage is one table for every class, written only by inserts:
+
+    facts(class, e, a, v, tx, added)
+
+- `class` is the class's table name, and `e` is the record's key, so keys stay unique within a class, as in inlay.
+  The class has its own column instead of a namespace in `a`, as Datomic has, because `e` alone is not unique across classes.
+- `a` is the field name; a record has one fact for each field, and no fact for the key, which is `e`.
+- `v` has no type: `to_sql` writes it and `from_sql` reads it with the field's type, and a comparison only ever meets the values of one field.
+- `added` is false for a retraction, as in Datomic.
+  The value of a field at T is its newest fact at or before T, if that fact is added.
+  A change adds the new value; a removal retracts every field.
+- An update writes only the fields that changed, compared in SQL, so an identical update writes nothing.
+
+Indexes, in the terms of Datomic's:
+
+- EAVT is the table itself: `WITHOUT ROWID`, with primary key `(class, e, a, tx)`.
+  It serves reading a record, a get by key, the newest fact of a field, and reading a whole class.
+- AVET is a partial index `(class, a, v, e, tx) WHERE class = … AND a = …` for each declared index, as Datomic only indexes the attributes marked for it.
+- VAET is the same partial index on each `Ref` field, which finds the records that point to a record.
+- AEVT and the log by transaction are left out.
+
+There are no foreign keys or unique constraints: the library checks them.
+`AlreadyExists` and `Missing` are checked as each call runs.
+`BrokenRef` is checked at commit, so the order of writes does not matter, on the records the transaction's writes touched, which they pass along, so no index on `tx` is needed.
+
+`open` does not check the classes against the stored facts in the first version.
+
+### Queries
+
+A class at T becomes a subquery that rebuilds its rows from its facts, in one pass along the primary key:
+
+    SELECT e, a, v, added, max(tx) FROM facts WHERE class = ? AND tx <= ? GROUP BY e, a
+
+with one row per record from `max(CASE a WHEN … THEN v END)` for each field, where `added` holds.
+SQLite takes the other columns of a `max()` group from the row with the maximum.
+The rest of the compiler stays as it is, on top of that subquery.
+
+The risk is filters: a condition on the rebuilt rows cannot reach the partial indexes, so every filter rebuilds the whole class.
+A condition on the key is pushed down, since `e` is a `GROUP BY` column.
+
+The steps:
+
+1. A: the rebuilt rows only, then the benchmark.
+2. B: a condition on a field also compiles to a lookup of facts, `e IN (SELECT e FROM facts WHERE class = ? AND a = ? AND v > ? AND …newest at T…)`, through the partial index, if the benchmark shows filters are slow.
+
+Compiling every query to joins over facts, as Datalog does, was left out.
+Each field read costs an index search, and another to check it is the newest at T, so loading many records costs several times as much as one pass, and it needs a new compiler for conditions, sorting, slices and aggregates.
 
 ## How to compare them
 
