@@ -198,8 +198,8 @@ class RecordSet[T](RecordView[T]):
     def delete(self, *keys: str) -> None:
         _check_idle(self._reading, [self._meta.cls])
         with _transaction(self._conn, self._ref_checks):
-            sql = delete_by_key_sql(self._meta)
-            deleted = self._conn.executemany(sql, ((to_sql(k),) for k in keys)).rowcount // len(self._meta.fields)
+            cursor = self._conn.executemany(delete_by_key_sql(self._meta), ((to_sql(k),) for k in keys))
+            deleted = _records(self._meta, cursor)
             if deleted != len(keys):
                 raise Missing(f"{len(keys) - deleted} of the {self._meta.cls.__name__} keys are not stored")
 
@@ -308,7 +308,7 @@ type _Write = Callable[[sqlite3.Connection, EntityMeta, list[object]], None]
 
 
 def _add(conn: sqlite3.Connection, m: EntityMeta, group: list[object]) -> None:
-    added = conn.executemany(add_sql(m), _rows(m, group)).rowcount // len(m.fields)
+    added = _records(m, conn.executemany(add_sql(m), _rows(m, group)))
     if added != len(group):
         raise AlreadyExists(f"{len(group) - added} of the {m.cls.__name__} keys are stored already")
 
@@ -318,13 +318,22 @@ def _update(conn: sqlite3.Connection, m: EntityMeta, group: list[object]) -> Non
 
 
 def _remove(conn: sqlite3.Connection, m: EntityMeta, group: list[object]) -> None:
-    deleted = conn.executemany(delete_equal_sql(m), _rows(m, group)).rowcount // len(m.fields)
+    deleted = _records(m, conn.executemany(delete_equal_sql(m), _rows(m, group)))
     if deleted != len(group):
         raise Missing(f"{len(group) - deleted} of the {m.cls.__name__} records are not stored")
 
 
 def _discard(conn: sqlite3.Connection, m: EntityMeta, group: list[object]) -> None:
     conn.executemany(delete_equal_sql(m), _rows(m, group))
+
+
+def _records(m: EntityMeta, cursor: sqlite3.Cursor) -> int:
+    """How many records of `m` the writes of `cursor` added or retracted.
+
+    Each one writes a datom for every field, which holds while stored records have the fields of the class;
+    `open` does not check that yet, so after a class changes the count is wrong.
+    """
+    return cursor.rowcount // len(m.fields)
 
 
 def _grouped(objs: Iterable[object]) -> dict[type, list[object]]:
