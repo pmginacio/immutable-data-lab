@@ -92,7 +92,8 @@ def ref_index_sql(m: EntityMeta, f: FieldMeta) -> str:
     """An index of the datoms of `Ref` field `f` by value, which finds the records that point to a record."""
     return f"""
         CREATE INDEX IF NOT EXISTS {_ref_index(m, f)} ON {_DATOMS} (class, a, v, e, tx)
-        WHERE class = {_text(m.table)} AND a = {_text(f.name)}"""
+        WHERE class = {_text(m.table)}
+            AND a = {_text(f.name)}"""
 
 
 def _ref_index(m: EntityMeta, f: FieldMeta) -> str:
@@ -103,7 +104,9 @@ def _newest(expr: str, cls: str, e: str, a: str) -> str:
     """`expr` over the newest datom of field `a` of record `e` of class `cls`, all SQL, or NULL if it has none."""
     return f"""(
         SELECT {expr} FROM {_DATOMS}
-        WHERE class = {cls} AND e = {e} AND a = {a}
+        WHERE class = {cls}
+            AND e = {e}
+            AND a = {a}
         ORDER BY tx DESC LIMIT 1
     )"""
 
@@ -169,7 +172,8 @@ def _retract_sql(m: EntityMeta, where: str) -> str:
         WHERE {where}"""
     newest = f"""
         SELECT class, e, a, v, added, max(tx) FROM {_DATOMS}
-        WHERE class = {_text(m.table)} AND e IN ({keys})
+        WHERE class = {_text(m.table)}
+            AND e IN ({keys})
         GROUP BY e, a"""
     return f"""
         INSERT INTO {_DATOMS} ({_DATOM_COLUMNS})
@@ -183,7 +187,9 @@ def dangling_ref_sql(m: EntityMeta, f: FieldMeta, target: EntityMeta) -> str:
     return f"""
         SELECT 1 FROM {_DATOMS} AS r
         WHERE r.tx = {_THIS_TX}
-            AND r.class = {_text(m.table)} AND r.a = {_text(f.name)} AND r.added
+            AND r.class = {_text(m.table)}
+            AND r.a = {_text(f.name)}
+            AND r.added
             AND NOT {_is_live(target, 'r.v')}
         LIMIT 1"""
 
@@ -194,12 +200,17 @@ def referenced_removal_sql(m: EntityMeta, f: FieldMeta, target: EntityMeta) -> s
     # Without statistics SQLite walks every datom of the class by its primary key instead.
     referrers = f"""
         SELECT 1 FROM {_DATOMS} AS r INDEXED BY {_ref_index(m, f)}
-        WHERE r.class = {_text(m.table)} AND r.a = {_text(f.name)}
-            AND r.v = k.e AND r.added AND r.tx = {newest_tx}"""
+        WHERE r.class = {_text(m.table)}
+            AND r.a = {_text(f.name)}
+            AND r.v = k.e
+            AND r.added
+            AND r.tx = {newest_tx}"""
     return f"""
         SELECT 1 FROM {_DATOMS} AS k
         WHERE k.tx = {_THIS_TX}
-            AND k.class = {_text(target.table)} AND k.a = {_text(target.key.name)} AND NOT k.added
+            AND k.class = {_text(target.table)}
+            AND k.a = {_text(target.key.name)}
+            AND NOT k.added
             AND EXISTS ({referrers})
         LIMIT 1"""
 
@@ -210,10 +221,13 @@ def _rows_sql(m: EntityMeta, tx: int | None) -> str:
     It groups only once, so SQLite can push a condition on the key down to the datoms of one record;
     through a second grouping, a `get` would rebuild the whole class. With `tx`, it takes two parameters.
     """
-    at = "" if tx is None else " AND {}.tx <= ?"
+    at = "" if tx is None else "\n            AND {}.tx <= ?"
     newer = f"""
         SELECT 1 FROM {_DATOMS} AS n
-        WHERE n.class = d.class AND n.e = d.e AND n.a = d.a AND n.tx > d.tx{at.format('n')}"""
+        WHERE n.class = d.class
+            AND n.e = d.e
+            AND n.a = d.a
+            AND n.tx > d.tx{at.format('n')}"""
     fields = ",\n            ".join(
         f"d.e AS {_column(f)}" if f.is_key else f"max(CASE d.a WHEN {_text(f.name)} THEN d.v END) AS {_column(f)}"
         for f in m.fields
