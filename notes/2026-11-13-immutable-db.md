@@ -167,7 +167,55 @@ Most reads are of the latest data, which is an exact match on `tx_to`, so `tx_to
   That makes `update` of n records take time in proportion to n squared.
 
 Reads at a past T have two ranges, and an index seeks on one, so they are served less well.
-Whether this is good enough is for the benchmark to say.
+The benchmark below measures how much.
+
+### Benchmark
+
+`benchmarks/history.py` runs the same writes and reads through inlay and the history db.
+The numbers here are for 20,000 orders of 2,000 customers, with every order updated 10 times, on Python 3.15 and SQLite 3.54.
+
+Reads of the latest data cost about the same as in inlay.
+Loading, filters and `get` are within 1.0 to 1.2 times inlay's time; a filter through a `Ref` and `len` with `sum` take 1.6 and 2 times, under a millisecond either way.
+
+Writes cost more.
+
+| write | inlay | history |
+|---|---|---|
+| add everything | 79 ms | 147 ms |
+| update all orders, one round | 104 ms | 1,115 ms |
+| 1,000 updates of one order, one call each | 71 ms | 264 ms |
+| remove 1,000 orders | 12 ms | 129 ms |
+| update all 2,000 customers | 4 ms | 20 ms |
+| 200 customers and 2,000 orders in one call | 27 ms | 242 ms |
+
+Almost all of it is in SQLite: Python takes about 80 ms of a 1.3 s update round, the same as in inlay.
+Ending the old versions takes about 1 s of it, because changing `tx_to` moves the row's entry in every index on it, at 150 to 330 ms per index.
+Inserting the new versions takes about 120 ms.
+Foreign key checks cost nothing measurable, and neither does the subquery for the transaction number in every row.
+Replacing a customer that orders refer to costs no more than replacing an order.
+
+Reads at a past transaction cost more the older the transaction, because SQLite walks every version that ended after it.
+At the first transaction, loading all orders takes 53 ms against 39 now, and a filter takes 16 to 19 ms against under half a millisecond.
+`as_of(datetime)` takes 0.03 ms at this size.
+
+The file is 62 MB against 4 MB, for 11 versions of every order.
+
+#### Index order
+
+The benchmark also runs the history db with its declared indexes the other way round, `(field, tx_to)`.
+
+| read | `(tx_to, field)` | `(field, tx_to)` |
+|---|---|---|
+| equality filter at the first transaction | 18 ms | 0.11 ms |
+| filter through a `Ref` at the first transaction | 16 ms | 0.5 ms |
+| range filter at the first transaction | 19 ms | 4.1 ms |
+| range filter now | 0.44 ms | 3.8 ms |
+| sorted, first 10, now | 0.07 ms | 4.5 ms |
+| one more update round | 1,286 ms | 1,423 ms |
+
+Field first serves past filters far better, and current range filters and sorting far worse, and it does not make writes faster.
+Most reads are of the latest data, so `tx_to` stays first.
+Fast past filters would need the field-first indexes in addition, at the cost of slower writes.
 
 ### The iteration guard
 
