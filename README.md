@@ -355,6 +355,10 @@ One difference from the db above: the same key twice in one `update` raises `Alr
 A class cannot be changed yet, so there is no `migrate` or `rename`.
 The design and its limits are in [`notes/2026-11-13-immutable-db.md`](notes/2026-11-13-immutable-db.md).
 
+`inlay.datoms` is a second experiment with the same API and `as_of`: it stores each field of a record as a datom, a row of one table shared by all classes, instead of one row per version.
+The library checks keys and references itself, since that table has no constraints, and an update stores only the fields that change.
+Every read rebuilds the records of its class from their datoms, so reads are much slower than in the history db for now.
+
 ## Design
 
 **Records are values.**
@@ -406,7 +410,7 @@ Each write call is atomic, and `db.transaction()` groups several, with savepoint
 
 **The core is pure.**
 Building conditions, compiling them, and building SQL statements are pure functions.
-Only the `db` modules, `inlay.db` and `inlay.history.db`, talk to SQLite.
+Only the `db` modules, `inlay.db`, `inlay.history.db` and `inlay.datoms.db`, talk to SQLite.
 
 | Module | Job |
 |---|---|
@@ -440,7 +444,7 @@ inlay needs Python 3.15 or later.
 uv run pytest                          # tests
 uv run pyright                         # type checks, including the example and the benchmark
 uv run python examples/shop.py         # the example app
-uv run python benchmarks/history.py    # inlay against the history db, now and at past transactions
+uv run python benchmarks/history.py    # inlay against both history experiments, now and at past transactions
 ```
 
 ## Notes
@@ -449,5 +453,5 @@ uv run python benchmarks/history.py    # inlay against the history db, now and a
 - [`notes/2026-11-11-sales-example-learnings.md`](notes/2026-11-11-sales-example-learnings.md) is what writing the sales example taught us about inlay, and the ideas it suggests.
 - [`notes/2026-11-13-migrations.md`](notes/2026-11-13-migrations.md) is the design of `migrate` and `rename`, and the discussion that led to it.
 - [`notes/2026-11-13-roadmap.md`](notes/2026-11-13-roadmap.md) is what is open and what comes next.
-- [`notes/2026-11-13-immutable-db.md`](notes/2026-11-13-immutable-db.md) is the design of the history db, `inlay.history`: one table of versions per class, and the plans for schema changes and a db of facts.
+- [`notes/2026-11-13-immutable-db.md`](notes/2026-11-13-immutable-db.md) is the design of the two history experiments, `inlay.history`, one table of versions per class, and `inlay.datoms`, one table of datoms, and the plans for schema changes.
 - [`notes/2026-11-10-immutable-data-and-databases.md`](notes/2026-11-10-immutable-data-and-databases.md) is the background: immutable data, FP style, and database design in Python.
