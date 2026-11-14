@@ -244,9 +244,10 @@ class Db:
             if at.tzinfo is None:
                 raise ValueError("as_of needs a datetime with a timezone, because transaction times are in UTC")
             tx = self._conn.execute(TX_AT, (tx_time(at),)).fetchone()[0]
-        elif not 0 <= at <= (latest := self.tx):
-            raise ValueError(f"there is no committed transaction {at}; the latest is {latest}")
         else:
+            latest = self.tx
+            if not 0 <= at <= latest:
+                raise ValueError(f"there is no committed transaction {at}; the latest is {latest}")
             tx = at
         return Snapshot(self._conn, self._reading, self._metas, tx)
 
