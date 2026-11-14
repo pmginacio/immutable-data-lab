@@ -63,15 +63,20 @@ TX_AT = f"{LATEST_TX} WHERE {_AT} <= ?"
 
 # The table of datoms, for every class: field `a` of record `e` of class `class` is `v` from transaction `tx` on,
 # or no longer has a value if `added` is false. `class` is the table name of the class, and `e` is the record's key.
-# The value of a field at a transaction is its newest datomat or before it. Datoms are only ever inserted,
+# The value of a field at a transaction is its newest datom at or before it. Datoms are only ever inserted,
 # except that a second write to a field in the same transaction replaces the first.
 # `v` takes any type, and keeps the one `to_sql` gave it.
 DATOMS_TABLE = "_inlay_datoms"
 _DATOMS = quote(DATOMS_TABLE)
-CREATE_DATOMS = (
-    f"CREATE TABLE {_DATOMS} (class TEXT NOT NULL, e TEXT NOT NULL, a TEXT NOT NULL, v ANY NOT NULL, "
-    "tx INTEGER NOT NULL, added INTEGER NOT NULL, PRIMARY KEY (class, e, a, tx)) STRICT, WITHOUT ROWID"
-)
+CREATE_DATOMS = f"""CREATE TABLE {_DATOMS} (
+    class TEXT NOT NULL,
+    e TEXT NOT NULL,
+    a TEXT NOT NULL,
+    v ANY NOT NULL,
+    tx INTEGER NOT NULL,
+    added INTEGER NOT NULL,
+    PRIMARY KEY (class, e, a, tx)
+) STRICT, WITHOUT ROWID"""
 # Finds the datoms of the open transaction, which the checks of references read.
 CREATE_TX_INDEX = f"CREATE INDEX IF NOT EXISTS {quote(DATOMS_TABLE + '__tx')} ON {_DATOMS} (tx)"
 _DATOM_COLUMNS = "class, e, a, v, tx, added"
@@ -85,10 +90,9 @@ def tx_time(at: datetime) -> int:
 
 def ref_index_sql(m: EntityMeta, f: FieldMeta) -> str:
     """An index of the datoms of `Ref` field `f` by value, which finds the records that point to a record."""
-    return (
-        f"CREATE INDEX IF NOT EXISTS {_ref_index(m, f)} ON {_DATOMS} (class, a, v, e, tx) "
-        f"WHERE class = {_text(m.table)} AND a = {_text(f.name)}"
-    )
+    return f"""
+        CREATE INDEX IF NOT EXISTS {_ref_index(m, f)} ON {_DATOMS} (class, a, v, e, tx)
+        WHERE class = {_text(m.table)} AND a = {_text(f.name)}"""
 
 
 def _ref_index(m: EntityMeta, f: FieldMeta) -> str:
@@ -96,12 +100,16 @@ def _ref_index(m: EntityMeta, f: FieldMeta) -> str:
 
 
 def _newest(expr: str, cls: str, e: str, a: str) -> str:
-    """`expr` over the newest datomof field `a` of record `e` of class `cls`, all SQL, or NULL if it has none."""
-    return f"(SELECT {expr} FROM {_DATOMS} WHERE class = {cls} AND e = {e} AND a = {a} ORDER BY tx DESC LIMIT 1)"
+    """`expr` over the newest datom of field `a` of record `e` of class `cls`, all SQL, or NULL if it has none."""
+    return f"""(
+        SELECT {expr} FROM {_DATOMS}
+        WHERE class = {cls} AND e = {e} AND a = {a}
+        ORDER BY tx DESC LIMIT 1
+    )"""
 
 
 def _is_live(target: EntityMeta, e: str) -> str:
-    """Whether the record of `target` with key `e`, which is SQL, is stored: its key's newest datomis added."""
+    """Whether the record of `target` with key `e`, which is SQL, is stored: its key's newest datom is added."""
     return f"coalesce({_newest('added', _text(target.table), e, _text(target.key.name))}, 0)"
 
 
@@ -117,16 +125,17 @@ def update_sql(m: EntityMeta) -> str:
 
 
 def _write_sql(m: EntityMeta, where: str) -> str:
-    """Adds a datomfor each field of a record whose field name and value, `new.column1` and `new.column2`, meet `where`.
+    """Adds a datom for each field of a record whose field name and value, `new.column1` and `new.column2`, meet `where`.
 
     It takes the values of the record's fields in order.
     """
     values = ", ".join(f"({_text(f.name)}, {_param(m, f)})" for f in m.fields)
-    return (
-        f"INSERT INTO {_DATOMS} ({_DATOM_COLUMNS}) "
-        f"SELECT {_text(m.table)}, {_param(m, m.key)}, new.column1, new.column2, {_THIS_TX}, 1 "
-        f"FROM (VALUES {values}) AS new WHERE {where} {_UPSERT}"
-    )
+    return f"""
+        INSERT INTO {_DATOMS} ({_DATOM_COLUMNS})
+        SELECT {_text(m.table)}, {_param(m, m.key)}, new.column1, new.column2, {_THIS_TX}, 1
+        FROM (VALUES {values}) AS new
+        WHERE {where}
+        {_UPSERT}"""
 
 
 def _param(m: EntityMeta, f: FieldMeta) -> str:
@@ -155,40 +164,44 @@ def _retract_sql(m: EntityMeta, where: str) -> str:
 
     Each retraction keeps the value it retracts, as in Datomic.
     """
-    keys = f"SELECT {_column(m.key)} FROM ({_rows_sql(m, None)}) WHERE {where}"
-    newest = (
-        f"SELECT class, e, a, v, added, max(tx) FROM {_DATOMS} "
-        f"WHERE class = {_text(m.table)} AND e IN ({keys}) GROUP BY e, a"
-    )
-    return (
-        f"INSERT INTO {_DATOMS} ({_DATOM_COLUMNS}) SELECT class, e, a, v, {_THIS_TX}, 0 "
-        f"FROM ({newest}) WHERE added {_UPSERT}"
-    )
+    keys = f"""
+        SELECT {_column(m.key)} FROM ({_rows_sql(m, None)})
+        WHERE {where}"""
+    newest = f"""
+        SELECT class, e, a, v, added, max(tx) FROM {_DATOMS}
+        WHERE class = {_text(m.table)} AND e IN ({keys})
+        GROUP BY e, a"""
+    return f"""
+        INSERT INTO {_DATOMS} ({_DATOM_COLUMNS})
+        SELECT class, e, a, v, {_THIS_TX}, 0 FROM ({newest})
+        WHERE added
+        {_UPSERT}"""
 
 
 def dangling_ref_sql(m: EntityMeta, f: FieldMeta, target: EntityMeta) -> str:
     """A row if a value of `Ref` field `f`, added in this transaction, points to no stored record of `target`."""
-    return (
-        f"SELECT 1 FROM {_DATOMS} AS r WHERE r.tx = {_THIS_TX} "
-        f"AND r.class = {_text(m.table)} AND r.a = {_text(f.name)} AND r.added "
-        f"AND NOT {_is_live(target, 'r.v')} LIMIT 1"
-    )
+    return f"""
+        SELECT 1 FROM {_DATOMS} AS r
+        WHERE r.tx = {_THIS_TX}
+            AND r.class = {_text(m.table)} AND r.a = {_text(f.name)} AND r.added
+            AND NOT {_is_live(target, 'r.v')}
+        LIMIT 1"""
 
 
 def referenced_removal_sql(m: EntityMeta, f: FieldMeta, target: EntityMeta) -> str:
     """A row if a record of `target`, removed in this transaction, is still the value of a stored `Ref` field `f`."""
     newest_tx = _newest("tx", "r.class", "r.e", "r.a")
     # Without statistics SQLite walks every datom of the class by its primary key instead.
-    referrers = (
-        f"SELECT 1 FROM {_DATOMS} AS r INDEXED BY {_ref_index(m, f)} "
-        f"WHERE r.class = {_text(m.table)} AND r.a = {_text(f.name)} "
-        f"AND r.v = k.e AND r.added AND r.tx = {newest_tx}"
-    )
-    return (
-        f"SELECT 1 FROM {_DATOMS} AS k WHERE k.tx = {_THIS_TX} "
-        f"AND k.class = {_text(target.table)} AND k.a = {_text(target.key.name)} AND NOT k.added "
-        f"AND EXISTS ({referrers}) LIMIT 1"
-    )
+    referrers = f"""
+        SELECT 1 FROM {_DATOMS} AS r INDEXED BY {_ref_index(m, f)}
+        WHERE r.class = {_text(m.table)} AND r.a = {_text(f.name)}
+            AND r.v = k.e AND r.added AND r.tx = {newest_tx}"""
+    return f"""
+        SELECT 1 FROM {_DATOMS} AS k
+        WHERE k.tx = {_THIS_TX}
+            AND k.class = {_text(target.table)} AND k.a = {_text(target.key.name)} AND NOT k.added
+            AND EXISTS ({referrers})
+        LIMIT 1"""
 
 
 def _rows_sql(m: EntityMeta, tx: int | None) -> str:
@@ -198,16 +211,21 @@ def _rows_sql(m: EntityMeta, tx: int | None) -> str:
     through a second grouping, a `get` would rebuild the whole class. With `tx`, it takes two parameters.
     """
     at = "" if tx is None else " AND {}.tx <= ?"
-    newer = f"SELECT 1 FROM {_DATOMS} AS n WHERE n.class = d.class AND n.e = d.e AND n.a = d.a AND n.tx > d.tx"
-    fields = ", ".join(
+    newer = f"""
+        SELECT 1 FROM {_DATOMS} AS n
+        WHERE n.class = d.class AND n.e = d.e AND n.a = d.a AND n.tx > d.tx{at.format('n')}"""
+    fields = ",\n            ".join(
         f"d.e AS {_column(f)}" if f.is_key else f"max(CASE d.a WHEN {_text(f.name)} THEN d.v END) AS {_column(f)}"
         for f in m.fields
     )
-    return (
-        f"SELECT {fields} FROM {_DATOMS} AS d WHERE d.class = {_text(m.table)}{at.format('d')} "
-        f"AND NOT EXISTS ({newer}{at.format('n')}) "
-        f"GROUP BY d.e HAVING max(CASE d.a WHEN {_text(m.key.name)} THEN d.added END)"
-    )
+    return f"""
+        SELECT
+            {fields}
+        FROM {_DATOMS} AS d
+        WHERE d.class = {_text(m.table)}{at.format('d')}
+            AND NOT EXISTS ({newer})
+        GROUP BY d.e
+        HAVING max(CASE d.a WHEN {_text(m.key.name)} THEN d.added END)"""
 
 
 def _sql_op(op: CompareOp) -> str:
