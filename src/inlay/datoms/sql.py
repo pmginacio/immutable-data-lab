@@ -95,6 +95,35 @@ CREATE_CURRENT = f"""CREATE TABLE {_CURRENT} (
     PRIMARY KEY ({_CURRENT_KEY})
 ) STRICT, WITHOUT ROWID"""
 
+# The rows of the current table as they were at each transaction `at_tx` that a snapshot read on this connection.
+# It is temporary: the past never changes, so each connection can keep its own copy, and SQLite drops it on close.
+_SNAPSHOTS = "temp." + quote("_inlay_at")
+CREATE_SNAPSHOTS = f"""CREATE TABLE IF NOT EXISTS {_SNAPSHOTS} (
+    at_tx INTEGER NOT NULL,
+    class TEXT NOT NULL,
+    e TEXT NOT NULL,
+    a TEXT NOT NULL,
+    v ANY NOT NULL,
+    added INTEGER NOT NULL,
+    PRIMARY KEY (at_tx, {_CURRENT_KEY})
+) STRICT, WITHOUT ROWID"""
+# A row if the snapshot table has rows at transaction ?1. Only a transaction with no datoms up to it has none,
+# and filling it again reads no datoms, through the `tx` index.
+SNAPSHOT_FILLED = f"SELECT 1 FROM {_SNAPSHOTS} WHERE at_tx = ?1 LIMIT 1"
+# Fills the snapshot table at transaction ?1 with the newest datom of each field at or before it.
+FILL_SNAPSHOT = f"""
+    INSERT INTO {_SNAPSHOTS} (at_tx, class, e, a, v, added)
+    SELECT ?1, d.class, d.e, d.a, d.v, d.added FROM {_DATOMS} AS d
+    WHERE d.tx <= ?1
+        AND NOT EXISTS (
+            SELECT 1 FROM {_DATOMS} AS n
+            WHERE n.class = d.class
+                AND n.e = d.e
+                AND n.a = d.a
+                AND n.tx > d.tx
+                AND n.tx <= ?1
+        )"""
+
 
 def tx_time(at: datetime) -> int:
     """`at`, which has a timezone, in the unit of the stored transaction times, cut to the millisecond as SQLite's are."""
@@ -244,47 +273,26 @@ def referenced_removal_sql(m: EntityMeta, f: FieldMeta, target: EntityMeta) -> s
 
 
 def _rows_sql(m: EntityMeta, tx: int | None) -> tuple[str, list[object]]:
-    """A SELECT of the records of `m` at transaction `tx`, rebuilt from their newest datoms,
+    """A SELECT of the records of `m` at transaction `tx`, from the snapshot table, which must be filled at `tx`,
     or of the current ones, from the current table, and its parameters.
 
-    Each groups only once, by `e`, so SQLite can push a condition on the key down to the rows of one record;
+    It groups only once, by `e`, so SQLite can push a condition on the key down to the rows of one record;
     through a second grouping, a `get` would rebuild the whole class.
     """
-    if tx is None:
-        return f"""
-            SELECT
-                {_fields(m, 'c')}
-            FROM {_CURRENT} AS c
-            WHERE c.class = {_text(m.table)}
-                AND c.added
-            GROUP BY c.e""", []
-    newer = f"""
-        SELECT 1 FROM {_DATOMS} AS n
-        WHERE n.class = d.class
-            AND n.e = d.e
-            AND n.a = d.a
-            AND n.tx > d.tx
-            AND n.tx <= ?"""
-    sql = f"""
-        SELECT
-            {_fields(m, 'd')}
-        FROM {_DATOMS} AS d
-        WHERE d.class = {_text(m.table)}
-            AND d.tx <= ?
-            AND NOT EXISTS ({newer})
-        GROUP BY d.e
-        HAVING max(CASE d.a WHEN {_text(m.key.name)} THEN d.added END)"""
-    return sql, [tx, tx]
-
-
-def _fields(m: EntityMeta, alias: str) -> str:
-    """The fields of `m` as columns, from the rows of one record in table `alias`, one for each field."""
-    return ", ".join(
-        f"{alias}.e AS {_column(f)}"
-        if f.is_key
-        else f"max(CASE {alias}.a WHEN {_text(f.name)} THEN {alias}.v END) AS {_column(f)}"
+    source, at = (_CURRENT, "") if tx is None else (_SNAPSHOTS, "AND c.at_tx = ?")
+    fields = ", ".join(
+        f"c.e AS {_column(f)}" if f.is_key else f"max(CASE c.a WHEN {_text(f.name)} THEN c.v END) AS {_column(f)}"
         for f in m.fields
     )
+    sql = f"""
+        SELECT
+            {fields}
+        FROM {source} AS c
+        WHERE c.class = {_text(m.table)}
+            {at}
+            AND c.added
+        GROUP BY c.e"""
+    return sql, [] if tx is None else [tx]
 
 
 def _sql_op(op: CompareOp) -> str:

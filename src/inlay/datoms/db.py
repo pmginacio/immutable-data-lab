@@ -17,10 +17,12 @@ from inlay.datoms.sql import (
     CONNECTION_SETUP,
     CREATE_CURRENT,
     CREATE_DATOMS,
+    CREATE_SNAPSHOTS,
     CREATE_TX_INDEX,
     CREATE_TX_TABLE,
     CURRENT_TABLE,
     DATOMS_TABLE,
+    FILL_SNAPSHOT,
     LATEST_TX,
     LIST_TABLES,
     RECORD_TX,
@@ -28,6 +30,7 @@ from inlay.datoms.sql import (
     ROLLBACK,
     ROLLBACK_TO,
     SAVEPOINT,
+    SNAPSHOT_FILLED,
     TX_AT,
     TX_TABLE,
     Writes,
@@ -84,10 +87,11 @@ class RecordView[T]:
     def __iter__(self) -> Iterator[T]:
         sql, params = select_sql(self._query, self._tx)
         classes = classes_read(self._query)
+        rows = self._read(sql, params)
         # SQLite does not say what an open SELECT returns once its tables change, so writes to them are refused.
         self._reading.update(classes)
         try:
-            for row in self._conn.execute(sql, params):
+            for row in rows:
                 yield _from_row(self._meta, row)
         finally:
             self._reading.subtract(classes)
@@ -157,7 +161,7 @@ class RecordView[T]:
         keys = tuple(own_value(self._meta.cls, k) for k in (key if many else (key,)))
         own = None if value is None else self._aggregated(aggregate, value)
         sql, params = aggregate_sql(self._query, self._tx, aggregate, own, keys)
-        rows = self._conn.execute(sql, params).fetchall()
+        rows = self._read(sql, params).fetchall()
         key_types = [result_type(k) for k in keys]
         value_type = aggregate.result or result_type(own)
         groups: dict[Any, Any] = {
@@ -189,7 +193,17 @@ class RecordView[T]:
 
     def _aggregate(self, aggregate: Aggregate[Any], value: Value | None = None) -> Any:
         sql, params = aggregate_sql(self._query, self._tx, aggregate, value)
-        return self._conn.execute(sql, params).fetchone()[0]
+        return self._read(sql, params).fetchone()[0]
+
+    def _read(self, sql: str, params: Sequence[object]) -> sqlite3.Cursor:
+        """Runs a query of this view, after filling the connection's snapshot table at `_tx` if it has no rows there.
+
+        The fill runs before every read, not once in `as_of`: a rollback also undoes a fill made inside the
+        transaction, and the snapshot must not read an empty table after it.
+        """
+        if self._tx is not None and self._conn.execute(SNAPSHOT_FILLED, (self._tx,)).fetchone() is None:
+            self._conn.execute(FILL_SNAPSHOT, (self._tx,))
+        return self._conn.execute(sql, params)
 
 
 @dataclass(frozen=True, eq=False)
@@ -429,7 +443,7 @@ def open(entities: Iterable[type], *, path: str | os.PathLike[str] = DEFAULT_PAT
         create_tables = [create for name, create in _OWN_TABLES if name not in tables]
         refs = [(m, f, metas[f.target]) for m in metas.values() for f in m.fields if f.target is not None]
         ref_indexes = [ref_index_sql(m, f) for m, f, _ in refs]
-        _execute(conn, (*create_tables, CREATE_TX_INDEX, *ref_indexes, COMMIT))
+        _execute(conn, (*create_tables, CREATE_TX_INDEX, *ref_indexes, CREATE_SNAPSHOTS, COMMIT))
     except BaseException:
         conn.close()  # also rolls back the schema changes
         raise

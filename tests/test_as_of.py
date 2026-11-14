@@ -136,6 +136,14 @@ def test_a_snapshot_inside_a_transaction_reads_the_last_committed_one(db):
     assert [o.total for o in before[Order]] == [o.total for o in now[Order]] == [10]
 
 
+def test_a_snapshot_first_read_in_a_transaction_that_rolls_back_still_reads_its_records(db):
+    with pytest.raises(RuntimeError), db.transaction():
+        snapshot = db.as_of(1)
+        assert list(snapshot[Order]) == [O1]
+        raise RuntimeError
+    assert list(snapshot[Order]) == [O1]
+
+
 def test_writing_while_looping_over_a_snapshot_of_the_same_class_is_refused(db):
     with pytest.raises(RuntimeError, match="Order changed during iteration"):
         for _ in db.as_of(1)[Order]:

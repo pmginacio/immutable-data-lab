@@ -8,7 +8,7 @@ import pytest
 
 import inlay.datoms
 from inlay import Ref, entity, key
-from inlay.datoms.sql import delete_by_key_sql, select_sql
+from inlay.datoms.sql import CREATE_SNAPSHOTS, delete_by_key_sql, select_sql
 from inlay.meta import meta
 from inlay.nodes import Compare, Filter, Table
 
@@ -62,8 +62,9 @@ def datoms(path, cls):
 def test_a_record_is_found_by_key_without_rebuilding_its_class(db, path, sql, params):
     # SQLite pushes a condition on the key through one grouping only; through two it rebuilds every record.
     with closing(sqlite3.connect(path)) as conn:
+        conn.execute(CREATE_SNAPSHOTS)
         plan = [row[3] for row in conn.execute(f"EXPLAIN QUERY PLAN {sql}", params)]
-    assert any(row.startswith("SEARCH ") and "(class=? AND e=?)" in row for row in plan)
+    assert any(row.startswith("SEARCH ") and "class=? AND e=?)" in row for row in plan)
 
 
 def test_an_update_adds_a_datom_only_for_the_fields_that_change(db, path):
