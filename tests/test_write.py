@@ -117,6 +117,14 @@ def test_ref_to_missing_object_fails_and_writes_nothing(db):
     assert db[Order].get(order.id) is None
 
 
+def test_a_reference_to_a_removed_record_raises(db):
+    ana = Customer(name="Ana")
+    db.add(ana)
+    db.remove(ana)
+    with pytest.raises(BrokenRef):
+        db.add(Order(customer=ana.id, total=5))
+
+
 def test_update_replaces_or_inserts(db):
     ana = Customer(name="Ana")
     db.update(ana)

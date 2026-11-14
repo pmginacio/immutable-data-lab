@@ -60,7 +60,7 @@ def test_open_creates_tables_and_indexes(tmp_path):
         assert conn.execute("PRAGMA journal_mode").fetchone() == ("wal",)
 
 
-# These also run against the history experiments, which check their stored tables the same way.
+# These also run against the history experiments; datoms checks only its own tables, not one for each class.
 @pytest.fixture(params=[inlay.open, inlay.history.open, inlay.datoms.open], ids=["inlay", "history", "datoms"])
 def open_db(request):
     return request.param

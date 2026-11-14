@@ -7,7 +7,7 @@ import pytest
 
 import inlay.datoms
 import inlay.history
-from inlay import BrokenRef, Ref, entity, key
+from inlay import Ref, entity, key
 from inlay.history.sql import tx_time
 
 
@@ -44,12 +44,6 @@ def db(request, path):
 def transactions(path):
     with closing(sqlite3.connect(path)) as conn:
         return conn.execute('SELECT "tx", "at" FROM "_inlay_tx" ORDER BY "tx"').fetchall()
-
-
-def test_a_reference_to_a_removed_record_raises(db):
-    db.remove(O1, ANA)
-    with pytest.raises(BrokenRef):
-        db.add(Order(id="o2", customer="ana", total=5))
 
 
 def test_a_removed_key_can_be_added_again(db):

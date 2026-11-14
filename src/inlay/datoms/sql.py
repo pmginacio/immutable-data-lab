@@ -68,6 +68,7 @@ TX_AT = f"{LATEST_TX} WHERE {_AT} <= ?"
 # `v` takes any type, and keeps the one `to_sql` gave it.
 DATOMS_TABLE = "_inlay_datoms"
 _DATOMS = quote(DATOMS_TABLE)
+_DATOM_KEY = "class, e, a, tx"
 CREATE_DATOMS = f"""CREATE TABLE {_DATOMS} (
     class TEXT NOT NULL,
     e TEXT NOT NULL,
@@ -75,12 +76,12 @@ CREATE_DATOMS = f"""CREATE TABLE {_DATOMS} (
     v ANY NOT NULL,
     tx INTEGER NOT NULL,
     added INTEGER NOT NULL,
-    PRIMARY KEY (class, e, a, tx)
+    PRIMARY KEY ({_DATOM_KEY})
 ) STRICT, WITHOUT ROWID"""
 # Finds the datoms of the open transaction, which the checks of references read.
 CREATE_TX_INDEX = f"CREATE INDEX IF NOT EXISTS {quote(DATOMS_TABLE + '__tx')} ON {_DATOMS} (tx)"
 _DATOM_COLUMNS = "class, e, a, v, tx, added"
-_UPSERT = "ON CONFLICT (class, e, a, tx) DO UPDATE SET v = excluded.v, added = excluded.added"
+_UPSERT = f"ON CONFLICT ({_DATOM_KEY}) DO UPDATE SET v = excluded.v, added = excluded.added"
 
 
 def tx_time(at: datetime) -> int:
