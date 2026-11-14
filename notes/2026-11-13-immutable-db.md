@@ -384,12 +384,54 @@ Adding is 7 times slower than in the history db.
 It has not been profiled; each record checks that its key is not stored and writes a datom for each field, and the reference checks read the new datoms again.
 
 Every read that is not a get rebuilds the whole class, so a filter, a sort or a `len` costs about as much as loading all records, 700 to 9,000 times inlay's time.
-And it grows with history: from 10 to 20 versions, a filter now goes from about 300 to about 530 ms, because the rebuild reads every datom of the class.
+And it grows with history: from 10 to 20 versions, a filter now goes from about 300 to about 530 ms, because the rebuild reads every datom of the class, with a search on the primary key for each to check that no newer one exists.
 A get stays at about 0.06 ms, since the key is pushed down to the datoms of one entity.
 
-So step B is needed for filters on declared indexes, which would then read only the datoms of the matching entities.
-It does not help loading all records, `len` or aggregates, which still rebuild the class and keep growing with history.
-Those would need the current datoms apart from the old ones, for example an `added`, current-only copy of the newest datom of each field, which brings back the cost of ending old versions that made the history db's updates slow.
+Step B would help filters on declared indexes only.
+Loading all records, `len`, sorting and aggregates would still rebuild the class and keep growing with history.
+So step B is set aside for a current table, below.
+
+### Next: a current table
+
+Nothing in the datoms table marks which datom of a field is the latest, so every reader works it out, at a cost that grows with history.
+Someone has to record what is current: either the reader searches for it, or the writer marks it.
+Datomic marks it too, in batches: a background indexing job moves replaced datoms from its current index to its history index.
+
+The ideas looked at and set aside:
+
+- Writing every field on every update gives a record one `tx` per version, but finding the latest `tx` of each record is the same search, and the fields that do not change get a datom each time.
+- Walking back through the transactions until every current record and field has been seen stops only at the oldest value still current, which is usually the start of history.
+- Jumping from the last datom of one record and field to the next, one search on the primary key each, costs the same for the present and every snapshot and does not grow with history.
+  But a search costs about as much as reading tens of rows, and SQLite only jumps with a skip-scan, which needs `ANALYZE`, or with a recursive query.
+- A range of transactions on each datom, `tx` to `tx_to`, is the history db's design per field; finding the ranges that contain T still grows with the distance from either end of history.
+  An R-tree index, which SQLite has, or a full copy every N transactions would give every snapshot the same cost, at the price of more machinery than the rest of datoms.
+- A `latest` flag on each datom with a partial index `WHERE latest AND added` is the current table kept inside the datoms table.
+  It is the main alternative to the design below, and costs about the same to write.
+
+The design:
+
+- A second table, `_inlay_current(class, e, a, v, tx)`, with primary key `(class, e, a)`, holds the latest added datom of each record and field.
+- Every write keeps it in step: an update upserts the fields that changed, and a removal deletes the record's rows.
+  `tx` is not in its key, so replacing a value changes the row in place, and only an index on that field's value moves.
+  In the history db, ending a version moves its entry in every index of the class, because a version is a whole row.
+- The datoms table stays as it is, written only by inserts, for `as_of` and history.
+- Reads of the present compile to one SQL shape over the current table, grouped by `e` into rows.
+  Loading all orders reads one row per record and field, whatever the number of versions.
+- `as_of(T)` builds a temporary table `_inlay_at_<T>` of the same shape, with every class at T, from the datoms, and its reads run the same SQL over it.
+  - It is built when `as_of` is called, for every class, with `CREATE TEMP TABLE IF NOT EXISTS`, so snapshots at the same T share it.
+  - SQLite drops it when the connection closes, so there is no cleanup code and no state in Python.
+  - A snapshot can still be taken inside a transaction: it reads only datoms with `tx <= T`, which are committed, and if the transaction rolls back, the temporary table goes with it and the next `as_of(T)` builds it again.
+  - A get on a fresh snapshot reads the table built by `as_of`.
+- Indexes on the values of declared fields, which step B had on the datoms table, go on the current table.
+
+What it costs:
+
+- Each changed field is written twice, to the datoms table and to the current table.
+- The file holds a copy of the current data.
+- `as_of` costs a full rebuild at T, once per connection for each T, where it now takes 0.03 ms.
+
+To check: that `as_of(db.tx)` inside an open transaction still finds the last committed transaction.
+To measure: an update round, loading all orders, a filter, and `as_of`, at 10 and 20 versions, against step A.
 
 ## How to compare them
 
