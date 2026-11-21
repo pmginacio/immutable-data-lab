@@ -2,6 +2,7 @@ import uuid
 from annotationlib import Format, get_annotations
 from collections.abc import Callable, Sequence
 from dataclasses import Field, dataclass, field, fields
+from types import NoneType, UnionType
 from typing import Any, dataclass_transform, get_args, get_origin, overload
 
 from inlay.conditions import Expr
@@ -17,21 +18,21 @@ def key() -> Any:
     return field(default_factory=lambda: str(uuid.uuid7()), metadata={_KEY: True})
 
 
-class Ref[T]:
-    """Marks a field as the key of a `T`.
+class Ref[T, V = str]:
+    """Marks a field as the key of a `T`, or with `Ref[T, str | None]` as an optional one.
 
-    Only type checkers use this class: it makes `o.customer` a `str` and `Order.customer` a `type[Customer]`.
+    Only type checkers use this class: it makes `o.customer` a `V` and `Order.customer` a `type[Customer]`.
     At runtime `@entity` replaces it with its own descriptor.
     """
 
     @overload
     def __get__(self, obj: None, owner: type) -> type[T]: ...
     @overload
-    def __get__(self, obj: object, owner: type) -> str: ...
+    def __get__(self, obj: object, owner: type) -> V: ...
     def __get__(self, obj: object, owner: type) -> Any:
         raise NotImplementedError
 
-    def __set__(self, obj: object, value: str) -> None:
+    def __set__(self, obj: object, value: V) -> None:
         raise NotImplementedError
 
 
@@ -83,19 +84,21 @@ def _entity_meta(cls: type, indexes: tuple[tuple[str, ...], ...]) -> EntityMeta:
 
 def _field_meta(owner: type, f: Field[Any], hint: Any) -> FieldMeta:
     is_key = bool(f.metadata.get(_KEY))
-    if get_origin(hint) is Ref:
-        (ref,) = get_args(hint)
-        return FieldMeta(owner, f.name, str, is_key, ref)
-    if hint not in SQL_TYPES:
+    ref, value = get_args(hint) if get_origin(hint) is Ref else (None, hint)
+    optional = isinstance(value, UnionType) and NoneType in get_args(value)
+    if optional:
+        others = [arg for arg in get_args(value) if arg is not NoneType]
+        value = others[0] if len(others) == 1 else value
+    if value not in SQL_TYPES or (ref is not None and value is not str):
         raise TypeError(f"{owner.__name__}.{f.name} has unsupported type {hint!r}")
-    return FieldMeta(owner, f.name, hint, is_key)
+    return FieldMeta(owner, f.name, value, is_key, ref, optional)
 
 
 def _check(cls_name: str, field_metas: tuple[FieldMeta, ...], indexes: tuple[tuple[str, ...], ...]) -> None:
     keys = [f for f in field_metas if f.is_key]
     if len(keys) != 1:
         raise TypeError(f"{cls_name} needs exactly one field declared with key(), found {len(keys)}")
-    if keys[0].py_type is not str or keys[0].ref is not None:
+    if keys[0].py_type is not str or keys[0].ref is not None or keys[0].optional:
         raise TypeError(f"{cls_name}.{keys[0].name} is the key and must be a str")
 
     if clashes := [f.name for f in field_metas if f.name in _EXPR_METHODS]:

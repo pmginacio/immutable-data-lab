@@ -116,7 +116,7 @@ def repoint_sql(table: str, stored_sql: str, old: EntityMeta, new: EntityMeta) -
 
 
 def _column_def(f: FieldMeta, table: str) -> str:
-    sql = f"{_column(f)} {SQL_TYPES[f.py_type]} NOT NULL"
+    sql = f"{_column(f)} {SQL_TYPES[f.py_type]}" + ("" if f.optional else " NOT NULL")
     if f.is_key:
         sql += " PRIMARY KEY"
     if f.target is not None:
@@ -142,7 +142,7 @@ def delete_by_key_sql(m: EntityMeta) -> str:
 
 
 def delete_equal_sql(m: EntityMeta) -> str:
-    return f"DELETE FROM {quote(m.table)} WHERE {' AND '.join(f'{_column(f)} = ?' for f in m.fields)}"
+    return f"DELETE FROM {quote(m.table)} WHERE {' AND '.join(f'{_column(f)} IS ?' for f in m.fields)}"
 
 
 def clear_sql(m: EntityMeta, cond: Condition) -> tuple[str, list[object]]:
@@ -151,8 +151,12 @@ def clear_sql(m: EntityMeta, cond: Condition) -> tuple[str, list[object]]:
     return f"DELETE FROM {quote(m.table)} WHERE {where}", params
 
 
+# SQLite's IS and IS NOT compare like = and !=, with the same use of indexes, but also match a NULL as Python does None.
+_SQL_OPS: dict[CompareOp, str] = {"==": "IS", "!=": "IS NOT"}
+
+
 def _sql_op(op: CompareOp) -> str:
-    return "=" if op == "==" else op
+    return _SQL_OPS.get(op, op)
 
 
 def condition_sql(cond: Condition) -> tuple[str, list[object]]:
@@ -173,15 +177,19 @@ def condition_sql(cond: Condition) -> tuple[str, list[object]]:
             keys, params = _keys_sql(records)
             return f"{_column(field)} IN ({keys})", params
         case In(field, tuple() as values):
-            marks = ", ".join("?" * len(values))
-            return f"{_column(field)} IN ({marks})", [to_sql(v) for v in values]
+            given = [to_sql(v) for v in values if v is not None]
+            sql = f"{_column(field)} IN ({', '.join('?' * len(given))})"
+            # IN never matches a NULL, even with NULL among the values.
+            return (f"({sql} OR {_column(field)} IS NULL)" if None in values else sql), given
         case And(items):
             return _join(items, " AND ", "1")
         case Or(items):
             return _join(items, " OR ", "0")
         case Not(item):
             sql, params = condition_sql(item)
-            return f"NOT ({sql})", params
+            # A comparison with a NULL is neither true nor false in SQL, and so is its NOT;
+            # counted as false first, its negation is true, as for any other record that does not match.
+            return f"NOT coalesce(({sql}), 0)", params
         case _:
             raise TypeError(f"expected a condition, got {cond!r}")
 

@@ -122,7 +122,7 @@ def test_transforms_pick_the_same_records_in_sqlite_and_in_python(conn, field, t
 
 
 def test_values_are_parameters():
-    assert condition_sql(Customer.name == "a'b") == ('"name" = ?', ["a'b"])
+    assert condition_sql(Customer.name == "a'b") == ('"name" IS ?', ["a'b"])
 
 
 def test_datetimes_are_stored_as_text():
@@ -132,10 +132,10 @@ def test_datetimes_are_stored_as_text():
 
 def test_relations_become_nested_subqueries():
     assert condition_sql(Order.customer.city == "Lisbon") == (
-        '"customer" IN (SELECT "id" FROM "customer" WHERE "city" = ?)',
+        '"customer" IN (SELECT "id" FROM "customer" WHERE "city" IS ?)',
         ["Lisbon"],
     )
     assert condition_sql(OrderLine.order.customer.city == "Lisbon") == (
-        '"order" IN (SELECT "id" FROM "order" WHERE "customer" IN (SELECT "id" FROM "customer" WHERE "city" = ?))',
+        '"order" IN (SELECT "id" FROM "order" WHERE "customer" IN (SELECT "id" FROM "customer" WHERE "city" IS ?))',
         ["Lisbon"],
     )

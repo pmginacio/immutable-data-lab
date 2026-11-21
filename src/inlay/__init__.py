@@ -1,4 +1,4 @@
-from inlay.conditions import contains, one_of
+from inlay.conditions import contains, is_none, one_of
 from inlay.db import (
     AlreadyExists,
     BrokenRef,
@@ -34,6 +34,7 @@ __all__ = [
     "avg",
     "contains",
     "entity",
+    "is_none",
     "key",
     "migrate",
     "negate",

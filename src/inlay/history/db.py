@@ -258,6 +258,7 @@ class Db:
         Each class its `Ref`s point to must have a table already, or be one of `classes`.
         """
         metas = [meta(c) for c in classes]
+        _refuse_optional(metas)
         with _transaction(self._conn, self._known):
             tables = self._tables()
             if stored := [m.cls.__name__ for m in metas if m.table in tables]:
@@ -469,6 +470,12 @@ def _execute(conn: sqlite3.Connection, statements: str | Iterable[str]) -> None:
     # A string is also an iterable of strings, one for each character, so it is checked first.
     for statement in (statements,) if isinstance(statements, str) else statements:
         conn.execute(statement)
+
+
+def _refuse_optional(metas: Iterable[EntityMeta]) -> None:
+    """The history db is paused, so its SQL has not learned NULLs."""
+    if optional := [f"{m.cls.__name__}.{f.name}" for m in metas for f in m.fields if f.optional]:
+        raise TypeError(f"the history db does not support optional fields yet: {', '.join(optional)}")
 
 
 def _shared_tables(metas: Iterable[EntityMeta]) -> str:

@@ -208,6 +208,35 @@ with inlay.open() as db:
 `Cls in db` tells whether a class has a table, and `del db[Cls]` drops it with its records, unless another table still points to it.
 Several processes that start on a new file at once check and register inside `db.transaction()`, which takes the write lock first, so only one of them creates the tables.
 
+### Optional fields
+
+A field typed `X | None` can hold `None`, and an optional reference is written `Ref[Customer, str | None]`.
+
+```python
+from inlay import is_none, negate
+
+@entity(indexes=[("customer",)])
+class Order:
+    id: str = key()
+    customer: Ref[Customer, str | None]
+    total: int
+    discount: int | None = None
+
+orders = db[Order]
+orders.filter(Order.discount == None)          # the orders with no discount; `is_none(Order.discount)` is the same
+orders.filter(Order.discount != 5)             # includes the orders with no discount, as in Python
+orders.filter(Order.discount > 1)              # a comparison with None is false, so these are left out
+orders.filter(negate(Order.discount > 1))      # and here they are in
+orders.filter(Order.customer.city == "Lisbon") # an order with no customer matches nothing through it
+```
+
+Conditions follow Python, so `==` and `!=` treat `None` as a value, and a condition and its negation always split the records in two.
+`one_of` can include `None`.
+Sorting puts `None` first, and last in reverse.
+`sum`, `min`, `max` and `avg` skip `None`, and `aggregate_by` groups the records with `None` under the key `None`.
+The key cannot be optional, and other unions, such as `int | str`, are refused.
+Type checkers flag ordering comparisons on an optional field, such as `Order.discount > 1`, because `None > 1` is an error in Python.
+
 ### Computed values and reports
 
 Values can be computed, and the db does the work, so reports add up many records without loading them.
@@ -360,13 +389,13 @@ with inlay.history.open() as db:                     # the file is .inlay-histor
 An update or a removal ends the current version of a record and keeps it.
 SQLite still checks keys and references, so a current order must refer to a current customer.
 One difference from the db above: the same key twice in one `update` raises `AlreadyExists`, where inlay keeps the last record.
-A class cannot be changed yet, so there is no `migrate` or `rename`.
+A class cannot be changed yet, so there is no `migrate` or `rename`, and optional fields are refused.
 The design and its limits are in [`notes/2026-11-13-immutable-db.md`](notes/2026-11-13-immutable-db.md).
 
 `inlay.datoms` is a second experiment with `as_of`, paused for now: it stores each field of a record as a datom, a row of one table shared by all classes, instead of one row per version.
 The library checks keys and references itself, since that table has no constraints, and an update stores only the fields that change.
 Reads of the present use a table of the current values, and a snapshot fills a temporary one on its first read.
-It still takes its classes in `open`, as in `inlay.datoms.open([Customer, Order])`, since it has no table for each class to register.
+It still takes its classes in `open`, as in `inlay.datoms.open([Customer, Order])`, since it has no table for each class to register, and it refuses optional fields.
 
 ## Design
 
@@ -383,7 +412,7 @@ Database calls are always visible: only `db`, and the sets and views it hands ou
 
 **Relations are keys.**
 `customer: Ref[Customer]` is stored as the customer's key.
-On a record it is a plain `str`, and following it is an explicit `db[Customer].get(order.customer)`.
+On a record it is a plain `str`, or `str | None` for a `Ref[Customer, str | None]`, and following it is an explicit `db[Customer].get(order.customer)`.
 On the class it leads to the other record's fields, so a filter can use `Order.customer.city`.
 Type checkers see both readings.
 
@@ -393,8 +422,10 @@ A pure function turns it into SQL, and every value goes in as a parameter:
 
 ```python
 Order.customer.city == "Lisbon"
-# "customer" IN (SELECT "id" FROM "customer" WHERE "city" = ?)
+# "customer" IN (SELECT "id" FROM "customer" WHERE "city" IS ?)
 ```
+
+`==` becomes SQLite's `IS`, which treats NULL as a value and uses indexes as `=` does, and `negate` counts an unknown result as false first, so conditions keep Python's two values.
 
 Relations become subqueries, so there are no joins to write and no duplicate rows.
 Combine conditions with `&`, `|`, `all_of`, `any_of`, `negate` and `none_of`.
@@ -440,7 +471,7 @@ This is version one, and the limits are on purpose.
 - SQLite only.
 - A `Db` works only in the thread and process that opened it: open one in each.
 - Several processes creating the same new db file at once can fail: create it once first.
-- No optional fields, enums or composite keys.
+- No enums or composite keys.
 - No cascading deletes or reverse relations.
 - Few functions so far: arithmetic, `to_month` and `to_day`.
 - Slices that skip many records are slow, because SQLite reads and discards the skipped rows.

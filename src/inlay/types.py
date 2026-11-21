@@ -30,4 +30,4 @@ def to_sql(value: object) -> object:
 
 def from_sql(value: object, py_type: type) -> object:
     convert = _FROM_SQL.get(py_type)
-    return value if convert is None else convert(value)
+    return value if convert is None or value is None else convert(value)

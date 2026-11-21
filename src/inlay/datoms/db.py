@@ -433,6 +433,9 @@ _OWN_TABLES = ((TX_TABLE, CREATE_TX_TABLE), (DATOMS_TABLE, CREATE_DATOMS), (CURR
 def open(entities: Iterable[type], *, path: str | os.PathLike[str] = DEFAULT_PATH) -> Db:
     metas = _metas(entities)
     _check_refs(metas)
+    # The datoms version is paused, so its SQL has not learned NULLs.
+    if optional := [f"{m.cls.__name__}.{f.name}" for m in metas.values() for f in m.fields if f.optional]:
+        raise TypeError(f"the datoms version does not support optional fields yet: {', '.join(optional)}")
     conn = sqlite3.connect(path, autocommit=True)
     try:
         _execute(conn, (*CONNECTION_SETUP, BEGIN))

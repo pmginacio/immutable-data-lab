@@ -121,6 +121,12 @@ def contains(field: str, text: str) -> Condition:
     return _through(relations, Match(f, "contains", text))
 
 
+def is_none(value: object) -> Condition:
+    """`value` is None. The same as `value == None`, which linters flag."""
+    relations, v = _parts(value)
+    return _through(relations, Compare(v, "==", None))
+
+
 def one_of[T](field: T, values: Iterable[T]) -> Condition:
     relations, f = _field_parts(field)
     return _through(relations, In(f, tuple(values)))
