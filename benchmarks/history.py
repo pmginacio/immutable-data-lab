@@ -96,6 +96,16 @@ type AnyDb = inlay.Db | inlay.history.Db | inlay.datoms.Db
 type HistoryDb = inlay.history.Db | inlay.datoms.Db
 
 
+def open_shop(open_db: Callable[..., Any], path: Path) -> Any:
+    """The db at `path` with `Customer` and `Order`; the datoms version, which is paused, still takes them in `open`."""
+    if open_db is inlay.datoms.open:
+        return open_db([Customer, Order], path=path)
+    db = open_db(path)
+    if Customer not in db:
+        db.register(Customer, Order)
+    return db
+
+
 def write_all(db: AnyDb, w: Workload) -> dict[str, float]:
     return {
         "add everything": once(lambda: db.add(*w.customers, *w.orders)),
@@ -130,7 +140,7 @@ def reads(orders: Orders, w: Workload, when: str) -> dict[str, float]:
 
 def history_reads(open_db: Callable[..., HistoryDb], path: Path, w: Workload) -> dict[str, float]:
     """Reads now and at three past transactions, and `as_of` with the time of each."""
-    with open_db([Customer, Order], path=path) as db:
+    with open_shop(open_db, path) as db:
         results = reads(lambda: db[Order], w, "now")
         points = {"the first": 1, "a middle": 1 + len(w.rounds) // 2, "the latest": db.tx}
         with closing(sqlite3.connect(path)) as conn:
@@ -148,12 +158,12 @@ def history_reads(open_db: Callable[..., HistoryDb], path: Path, w: Workload) ->
 
 
 def one_more_round(open_db: Callable[..., AnyDb], path: Path, w: Workload) -> dict[str, float]:
-    with open_db([Customer, Order], path=path) as db:
+    with open_shop(open_db, path) as db:
         return {"one more update round, after the history": once(lambda: db.update(*w.extra_round))}
 
 
 def put_fields_first(path: Path) -> None:
-    """Rebuild the history db's declared indexes of `Order` as (field, _tx_to). `open` keeps indexes that exist."""
+    """Rebuild the history db's declared indexes of `Order` as (field, _tx_to). The db keeps indexes that it finds by name."""
     with closing(sqlite3.connect(path, autocommit=True)) as conn:
         for field in ("customer", "total"):
             conn.execute(f'DROP INDEX "order__{field}"')
@@ -184,7 +194,7 @@ def main() -> None:
         columns: dict[str, dict[str, float]] = {name: {} for name in runs}
         for name in ("inlay", "history", "datoms"):  # the field-first column is a copy of the history file
             open_db, path = runs[name]
-            with open_db([Customer, Order], path=path) as db:
+            with open_shop(open_db, path) as db:
                 columns[name] |= write_all(db, w)
                 if name == "inlay":  # the history experiments read now in `history_reads`
                     columns[name] |= reads(lambda: db[Order], w, "now")

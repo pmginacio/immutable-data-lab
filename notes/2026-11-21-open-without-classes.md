@@ -1,7 +1,6 @@
 # Opening a db without a list of classes
 
-A design for `open(path)` without the list of classes, decided on 2026-11-21.
-Nothing is built yet.
+A design for `open(path)` without the list of classes, decided and built on 2026-11-21, in inlay and the history db.
 
 ## The problem
 
@@ -54,7 +53,11 @@ Each operation takes the name and the behaviour of the dict or set operation it 
 - Another process dropping or changing a table that this one already knows is not handled: the next statement fails with SQLite's own error, as in any database whose tables are dropped under it.
 - `del db[Cls]` drops the table and its indexes, and raises `BrokenRef` while another table points to it.
   In the history db it drops the history of the class too.
-- `migrate(fn, old, new, path=...)` loses `other_entities`; the db it passes to `fn` checks other classes on first use, as any db does.
+- The first use of a class also creates the indexes it declares that its table lacks, and drops the ones inlay made, named after the table, that it no longer declares, so indexes follow the class with no `migrate`.
+- `migrate(fn, old, new, path=...)` loses `other_entities`.
+  The db it passes to `fn` checks nothing on first use, since the tables change shape until the end, and checks the classes `fn` used once the old table is gone.
+  `Db` takes its first-use check as a parameter for that.
+- In the history db, `register` and `del db[Cls]` take no transaction number, since they change no record.
 - There is no list of the classes in a db.
   The file stores table names, not classes, and finding the class of a table would need a registry of every `@entity` class, which is global state: redefining a class, in a notebook or a test, gives two classes for one table, and what the list holds would depend on which modules are imported.
   Nothing needs it yet.
@@ -90,5 +93,6 @@ A renamed class gets no table until it is registered; `rename` moves the old tab
 
 ## Open
 
-- The datoms version has no table for each class; it is paused, and gets the same API in the simplest form when it is picked up again.
-- The error for `register` when a table exists: `SchemaMismatch` is proposed, as in `rename`.
+- The datoms version still takes its classes in `open`.
+  It has no table for each class, and its reference checks are built from the classes it knows, so a process that never used `Order` would not check that removing a customer leaves orders pointing nowhere; it needs the classes and their references stored in the file first.
+  It is paused, and gets the new API when it is picked up again.
