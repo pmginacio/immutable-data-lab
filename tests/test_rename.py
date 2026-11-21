@@ -46,15 +46,16 @@ def path(tmp_path):
     path = tmp_path / "shop.db"
     ana = Customer(name="Ana")
     order = Order(customer=ana.id, total=10)
-    with inlay.open([Customer, Order, OrderLine], path=path) as db:
+    with inlay.open(path) as db:
+        db.register(Customer, Order, OrderLine)
         db.add(ana, order, OrderLine(order=order.id))
     return path
 
 
 def test_rename_keeps_the_data_and_the_references_of_other_tables(path):
     inlay.rename("Order", "Purchase", path=path)
-    # Opening checks the stored table of the lines against a class that refers to Purchase.
-    with inlay.open([Customer, Purchase, PurchaseLine], path=path) as db:
+    # The first use checks the stored table of the lines against a class that refers to Purchase.
+    with inlay.open(path) as db:
         (purchase,) = db[Purchase]
         (line,) = db[PurchaseLine]
         assert (purchase.total, line.order) == (10, purchase.id)
@@ -78,7 +79,7 @@ def test_rename_is_not_idempotent(path):
 def test_rename_onto_an_existing_table_fails_and_changes_nothing(path):
     with pytest.raises(SchemaMismatch, match="table 'customer' already exists"):
         inlay.rename("Order", "Customer", path=path)
-    with inlay.open([Customer, Order, OrderLine], path=path) as db:
+    with inlay.open(path) as db:
         assert len(db[Order]) == 1
 
 

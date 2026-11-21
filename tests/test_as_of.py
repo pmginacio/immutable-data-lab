@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
+from helpers import opened
 
 import inlay.datoms
 import inlay.history
@@ -36,7 +37,7 @@ def path(tmp_path):
 # Both history experiments number transactions and read past ones the same way.
 @pytest.fixture(params=[inlay.history.open, inlay.datoms.open], ids=["history", "datoms"])
 def db(request, path):
-    with request.param([Customer, Order], path=path) as db:
+    with opened(request.param, [Customer, Order], path) as db:
         db.add(ANA, O1)
         yield db
 

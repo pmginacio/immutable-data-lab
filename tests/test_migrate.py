@@ -86,7 +86,8 @@ def path(tmp_path):
     path = tmp_path / "shop.db"
     ana = Customer(name="Ana")
     order = OldOrder(id="o1", customer=ana.id, total=10)
-    with inlay.open([Customer, OldOrder, OldLine], path=path) as db:
+    with inlay.open(path) as db:
+        db.register(Customer, OldOrder, OldLine)
         db.add(ana, order, OldLine(id="l1", order=order.id))
     return path
 
@@ -113,7 +114,7 @@ def add_discount_to_purchase(db: Db) -> None:
 def test_the_new_class_takes_the_name_of_the_old_one(path):
     inlay.migrate(add_discount, OrderLegacy, Order, path=path)
     assert table_names(path) == {"customer", "order", "order_line"}
-    with inlay.open([Customer, Order, OrderLine], path=path) as db:
+    with inlay.open(path) as db:
         (order,) = db[Order]
         assert (order.id, order.total, order.discount) == ("o1", 10, 0)
         assert [line.order for line in db[OrderLine]] == ["o1"]
@@ -125,11 +126,11 @@ def test_the_indexes_of_the_new_class_exist_after_the_old_table_is_gone(path):
 
 
 def test_the_new_class_has_a_table_of_its_own_and_the_references_to_the_old_one_follow(path):
-    inlay.migrate(add_discount_to_purchase, OldOrder, Purchase, [PurchaseLine], path=path)
+    inlay.migrate(add_discount_to_purchase, OldOrder, Purchase, path=path)
     assert table_names(path) == {"customer", "purchase", "order_line"}
     assert index_names(path, "order_line") == {"order_line__order"}
-    # Opening checks the stored table of the lines against a class that refers to Purchase.
-    with inlay.open([Customer, Purchase, PurchaseLine], path=path) as db:
+    # The first use checks the stored table of the lines against a class that refers to Purchase.
+    with inlay.open(path) as db:
         (purchase,) = db[Purchase]
         assert [line.order for line in db[PurchaseLine]] == [purchase.id]
 
@@ -139,8 +140,8 @@ def test_fn_can_change_keys_and_update_the_records_that_refer_to_them(path):
         db.add(*(Booking(id="b-" + o.id, customer=o.customer, total=o.total) for o in db[OldOrder]))
         db.update(*(replace(line, order="b-" + line.order) for line in tuple(db[BookingLine])))
 
-    inlay.migrate(rekey, OldOrder, Booking, [BookingLine], path=path)
-    with inlay.open([Customer, Booking, BookingLine], path=path) as db:
+    inlay.migrate(rekey, OldOrder, Booking, path=path)
+    with inlay.open(path) as db:
         assert [b.id for b in db[Booking]] == ["b-o1"]
         assert [line.order for line in db[BookingLine]] == ["b-o1"]
 
@@ -164,7 +165,7 @@ def test_an_error_in_fn_changes_nothing(path, old, new, fn):
     with pytest.raises(RuntimeError):
         inlay.migrate(failing, old, new, path=path)
     assert table_names(path) == {"customer", "order", "order_line"}
-    with inlay.open([Customer, OldOrder, OldLine], path=path) as db:
+    with inlay.open(path) as db:
         assert len(db[OldOrder]) == 1
 
 
@@ -185,8 +186,8 @@ def test_the_old_and_the_new_class_cannot_share_a_table(path):
 
 def test_a_db_without_the_old_table_is_refused(tmp_path):
     path = tmp_path / "other.db"
-    with inlay.open([Customer], path=path):
-        pass
+    with inlay.open(path) as db:
+        db.register(Customer)
     with pytest.raises(SchemaMismatch, match="cannot migrate Order to Purchase"):
         inlay.migrate(add_discount_to_purchase, OldOrder, Purchase, path=path)
 
@@ -221,7 +222,8 @@ class Category:
 def test_a_class_that_refers_to_itself_is_migrated_with_its_references(tmp_path):
     path = tmp_path / "shop.db"
     old = old_category()
-    with inlay.open([old], path=path) as db:
+    with inlay.open(path) as db:
+        db.register(old)
         db.add(old(id="all", parent="all", name="All"), old(id="books", parent="all", name="Books"))
         db.add(old(id="novels", parent="books", name="Novels"))
 
@@ -231,7 +233,7 @@ def test_a_class_that_refers_to_itself_is_migrated_with_its_references(tmp_path)
         db.add(*(Category(id=c.id, parent=c.parent, name=c.name, top_level=c.id in top) for c in db[CategoryLegacy]))
 
     inlay.migrate(add_top_level, CategoryLegacy, Category, path=path)
-    with inlay.open([Category], path=path) as db:
+    with inlay.open(path) as db:
         assert {c.id: (c.parent, c.top_level) for c in db[Category]} == {
             "all": ("all", True),
             "books": ("all", True),

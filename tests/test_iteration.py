@@ -1,6 +1,7 @@
 from dataclasses import replace
 
 import pytest
+from helpers import opened
 
 import inlay
 import inlay.datoms
@@ -35,7 +36,7 @@ BOB = Customer(id="bob", name="Bob", city="Porto")
 # The history experiments share the guard, so every iteration test also runs against them.
 @pytest.fixture(params=[inlay.open, inlay.history.open, inlay.datoms.open], ids=["inlay", "history", "datoms"])
 def db(request, tmp_path):
-    with request.param([Customer, Order, Event], path=tmp_path / "shop.db") as db:
+    with opened(request.param, [Customer, Order, Event], tmp_path / "shop.db") as db:
         db.add(ANA, BOB, Order(customer="ana", total=10))
         yield db
 

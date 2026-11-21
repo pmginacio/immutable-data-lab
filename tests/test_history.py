@@ -37,7 +37,8 @@ def path(tmp_path):
 
 @pytest.fixture
 def db(path):
-    with inlay.history.open([Customer, Order], path=path) as db:
+    with inlay.history.open(path) as db:
+        db.register(Customer, Order)
         db.add(ANA, O1)
         yield db
 

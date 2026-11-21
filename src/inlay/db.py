@@ -3,14 +3,14 @@ import sqlite3
 from collections import Counter, defaultdict
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Any, Self, overload
 from urllib.parse import quote
 
 from inlay.conditions import own_value
 from inlay.functions import Aggregate, aggregate_of
-from inlay.meta import EntityMeta, meta, metas as _metas, table_name
+from inlay.meta import EntityMeta, meta, reachable, table_name
 from inlay.nodes import (
     Compare,
     Condition,
@@ -46,7 +46,9 @@ from inlay.sql import (
     create_table_sql,
     delete_by_key_sql,
     delete_equal_sql,
+    drop_index_sql,
     drop_table_sql,
+    indexes_sql,
     insert_sql,
     rename_table_sql,
     repoint_sql,
@@ -203,12 +205,15 @@ class RecordView[T]:
         return self._conn.execute(sql, params).fetchone()[0]
 
 
+@dataclass(frozen=True, eq=False)
 class RecordSet[T](RecordView[T]):
     """All the records of one class. Unlike a view, it can also delete."""
 
+    _known: set[type] = field(kw_only=True)  # the db's, which a rollback empties
+
     def delete(self, *keys: str) -> None:
         _check_idle(self._reading, [self._meta.cls])
-        with _transaction(self._conn):
+        with _transaction(self._conn, self._known):
             deleted = self._conn.executemany(delete_by_key_sql(self._meta), ((k,) for k in keys)).rowcount
             if deleted != len(keys):
                 raise Missing(f"{len(keys) - deleted} of the {self._meta.cls.__name__} keys are not stored")
@@ -218,21 +223,63 @@ class RecordSet[T](RecordView[T]):
         check_condition(self._meta.cls, cond)
         sql, params = clear_sql(self._meta, cond)
         _check_idle(self._reading, [self._meta.cls])
-        with _transaction(self._conn):
+        with _transaction(self._conn, self._known):
             self._conn.execute(sql, params)
 
 
 class Db:
-    def __init__(self, conn: sqlite3.Connection, metas: frozendict[type, EntityMeta]) -> None:
+    def __init__(self, conn: sqlite3.Connection, check: _Check | None = None) -> None:
         self._conn = conn
-        self._metas = metas
         self._reading: Counter[type] = Counter()
+        # The classes whose tables this db has found in the file, matching them. Any rollback empties it,
+        # since it may have undone a `register` or a `del`, and the next use of each class looks again.
+        self._known: set[type] = set()
+        self._check = check or _check_in_file
 
     def __getitem__[T](self, cls: type[T]) -> RecordSet[T]:
-        return RecordSet(self._conn, self._reading, Table(self._meta(cls).cls))
+        """The records of `cls`. Raises `KeyError` if it has no table, and `SchemaMismatch` if its table differs."""
+        return RecordSet(self._conn, self._reading, Table(self._checked(cls).cls), _known=self._known)
+
+    def __contains__(self, cls: type) -> bool:
+        """Whether `cls` has a table, even one that differs from it."""
+        return meta(cls).table in self._tables()
+
+    def __delitem__(self, cls: type) -> None:
+        """Drops the table of `cls` and its records. Raises `BrokenRef` while another table points to it."""
+        m = meta(cls)
+        _check_idle(self._reading, [cls])
+        with _transaction(self._conn, self._known):
+            if m.table not in self._tables():
+                raise KeyError(f"no table in this db for {cls.__name__}")
+            referrers = [t for (t,) in self._conn.execute(REFERRERS, (m.table,)) if t != m.table]
+            if referrers:
+                raise BrokenRef(f"{cls.__name__} cannot be deleted while tables {referrers} point to it")
+            self._conn.execute(drop_table_sql(m.table))
+            self._known.discard(cls)
+
+    def register(self, *classes: type) -> None:
+        """Creates the tables and indexes of `classes`. Raises `SchemaMismatch` if one of them has a table.
+
+        Each class its `Ref`s point to must have a table already, or be one of `classes`.
+        """
+        metas = [meta(c) for c in classes]
+        with _transaction(self._conn, self._known):
+            tables = self._tables()
+            if stored := [m.cls.__name__ for m in metas if m.table in tables]:
+                raise SchemaMismatch(f"a table is already in this db for {', '.join(stored)}")
+            if shared := _shared_tables(metas):
+                raise TypeError(f"{shared} use the same table")
+            targets = {f.target for m in metas for f in m.fields if f.target is not None} - set(classes)
+            if missing := [t.__name__ for t in targets if meta(t).table not in tables]:
+                raise TypeError(f"{', '.join(missing)} must be registered first, or in the same call")
+            for target in targets:
+                self._checked(target)
+            _execute(self._conn, (create_table_sql(m) for m in metas))
+            _execute(self._conn, (sql for m in metas for sql in indexes_sql(m).values()))
+            self._known.update(classes)
 
     def transaction(self) -> AbstractContextManager[None]:
-        return _transaction(self._conn)
+        return _transaction(self._conn, self._known)
 
     def add(self, *objs: object) -> None:
         self._apply_by_entity(objs, _insert)
@@ -257,19 +304,45 @@ class Db:
     ) -> None:
         self.close()
 
-    def _meta(self, cls: type) -> EntityMeta:
-        try:
-            return self._metas[cls]
-        except KeyError:
-            raise KeyError(f"{cls.__name__} was not passed to inlay.open") from None
+    def _checked(self, cls: type) -> EntityMeta:
+        if cls not in self._known:
+            self._known.update(self._check(self._conn, cls))
+        return meta(cls)
+
+    def _tables(self) -> dict[str, str]:
+        return dict(self._conn.execute(LIST_TABLES))
 
     def _apply_by_entity(self, objs: Sequence[object], write: _Write) -> None:
         """Runs `write` on the records of each class, all in one transaction."""
         groups = _grouped(objs)
         _check_idle(self._reading, groups)
-        with _transaction(self._conn):
+        with _transaction(self._conn, self._known):
             for cls, group in groups.items():
-                write(self._conn, self._meta(cls), group)
+                write(self._conn, self._checked(cls), group)
+
+
+# Checks a class the db has not used yet, and returns the classes it found matching their tables, the class included.
+type _Check = Callable[[sqlite3.Connection, type], list[type]]
+
+
+def _check_in_file(conn: sqlite3.Connection, cls: type) -> list[type]:
+    """Checks the tables of `cls` and of the classes its `Ref`s reach against them, and returns those classes.
+
+    It also creates the declared indexes that are missing and drops the ones no longer declared.
+    """
+    metas = reachable(cls)
+    tables = dict(conn.execute(LIST_TABLES))
+    if missing := [m.cls.__name__ for m in metas if m.table not in tables]:
+        raise KeyError(f"no table in this db for {', '.join(missing)}; register it first")
+    _check_tables(metas, tables)
+    for m in metas:
+        _sync_indexes(conn, m)
+    return [m.cls for m in metas]
+
+
+def _trust(conn: sqlite3.Connection, cls: type) -> list[type]:
+    """Checks nothing: during `migrate` the tables change shape until the end, where the classes used are checked."""
+    return [cls]
 
 
 # Writes the records of one class. It runs inside the transaction, so raising undoes the whole call.
@@ -315,8 +388,11 @@ _NESTED = (SAVEPOINT, RELEASE, (ROLLBACK_TO, RELEASE))
 
 
 @contextmanager
-def _transaction(conn: sqlite3.Connection) -> Iterator[None]:
-    """Runs a new transaction, or a savepoint inside an open one, so a failed call leaves nothing behind."""
+def _transaction(conn: sqlite3.Connection, known: set[type]) -> Iterator[None]:
+    """Runs a new transaction, or a savepoint inside an open one, so a failed call leaves nothing behind.
+
+    A rollback empties `known`, the classes the db found in the file, since it may have undone a change to the tables.
+    """
     begin, end, undo = _NESTED if conn.in_transaction else _TOP_LEVEL
     with _store_errors():
         _execute(conn, begin)
@@ -325,6 +401,7 @@ def _transaction(conn: sqlite3.Connection) -> Iterator[None]:
             _execute(conn, end)
         except BaseException:
             _execute(conn, undo)
+            known.clear()
             raise
 
 
@@ -357,21 +434,15 @@ def _from_row(m: EntityMeta, row: Sequence[object]) -> Any:
 DEFAULT_PATH = ".inlay.db"
 
 
-def open(entities: Iterable[type], *, path: str | os.PathLike[str] = DEFAULT_PATH) -> Db:
-    metas = _metas(entities)
-    _check_refs(metas)
+def open(path: str | os.PathLike[str] = DEFAULT_PATH) -> Db:
+    """The db in the file at `path`, created if there is none. `Db.register` creates the tables of classes."""
     conn = _connect(path, create=True)
     try:
-        _execute(conn, (*CONNECTION_SETUP, BEGIN))
-        tables = dict(conn.execute(LIST_TABLES))
-        _check_tables(metas.values(), tables)
-        create_tables = [create_table_sql(m) for m in metas.values() if m.table not in tables]
-        create_indexes = [create_index_sql(m, i) for m in metas.values() for i in m.indexes]
-        _execute(conn, (*create_tables, *create_indexes, COMMIT))
+        _execute(conn, CONNECTION_SETUP)
     except BaseException:
-        conn.close()  # also rolls back the schema changes
+        conn.close()
         raise
-    return Db(conn, metas)
+    return Db(conn)
 
 
 def rename(old: str, new: str, *, path: str | os.PathLike[str] = DEFAULT_PATH) -> None:
@@ -402,7 +473,6 @@ def migrate(
     fn: Callable[[Db], None],
     old: type,
     new: type,
-    other_entities: Iterable[type] = (),
     *,
     path: str | os.PathLike[str] = DEFAULT_PATH,
 ) -> None:
@@ -410,13 +480,12 @@ def migrate(
 
     `old` describes the table as it is stored and `new` the table it becomes; the old table is dropped at the end.
     Either `new` takes the table name of the stored table (it is moved aside to the table name of `old`),
-    or `new` has a table name of its own. `fn` gets a db with `old`, `new` and `other_entities`.
+    or `new` has a table name of its own. `fn` gets a db in which `old`, `new` and the classes with tables can be used.
     Nothing happens if the db already has the table of `new`.
     """
     old_meta, new_meta = meta(old), meta(new)
     if old_meta.table == new_meta.table:
         raise ValueError(f"{old.__name__} and {new.__name__} use the same table; give the old class another name")
-    metas = _metas((old, new, *other_entities))
     conn = _connect(path, create=False)
     try:
         _execute(conn, (*MIGRATION_SETUP, BEGIN))
@@ -433,12 +502,14 @@ def migrate(
                 f"that matches {old.__name__} and no table {new_meta.table!r}"
             )
         conn.execute(create_table_sql(new_meta))
-        fn(Db(conn, metas))
+        db = Db(conn, _trust)
+        fn(db)
         _repoint_referrers(conn, old_meta, new_meta)
         conn.execute(drop_table_sql(old_meta.table))
         # The indexes come last: a moved table keeps its index names, and `IF NOT EXISTS` would skip a clash.
         _execute(conn, (create_index_sql(new_meta, index) for index in new_meta.indexes))
-        _check_tables(metas.values(), dict(conn.execute(LIST_TABLES)))
+        used = [new_meta, *(meta(c) for c in db._known if c is not old)]
+        _check_tables(used, dict(conn.execute(LIST_TABLES)))
         _check_foreign_keys(conn)
         conn.execute(COMMIT)
     finally:
@@ -478,15 +549,24 @@ def _execute(conn: sqlite3.Connection, statements: str | Iterable[str]) -> None:
         conn.execute(statement)
 
 
-def _check_refs(metas: Mapping[type, EntityMeta]) -> None:
-    dangling = [
-        f"{m.cls.__name__}.{f.name} -> {f.target.__name__}"
-        for m in metas.values()
-        for f in m.fields
-        if f.target is not None and f.target not in metas
-    ]
-    if dangling:
-        raise TypeError(f"Ref fields point to entities not passed to inlay.open: {', '.join(dangling)}")
+def _shared_tables(metas: Iterable[EntityMeta]) -> str:
+    """The classes among `metas` that have the same table as another one, by name, or an empty string."""
+    by_table: defaultdict[str, list[str]] = defaultdict(list)
+    for m in metas:
+        by_table[m.table].append(m.cls.__qualname__)
+    return ", ".join(" and ".join(names) for names in by_table.values() if len(names) > 1)
+
+
+def _sync_indexes(conn: sqlite3.Connection, m: EntityMeta) -> None:
+    """Creates the indexes `m` declares that its table lacks, and drops the ones inlay made that it no longer declares.
+
+    Only indexes named as inlay names them, after the table, are dropped, so ones made by hand stay.
+    """
+    declared = indexes_sql(m)
+    stored = [name for name, _ in conn.execute(LIST_INDEXES, (m.table,)) if name.startswith(f"{m.table}__")]
+    drops = [drop_index_sql(name) for name in stored if name not in declared]
+    creates = [sql for name, sql in declared.items() if name not in stored]
+    _execute(conn, (*drops, *creates))
 
 
 def _check_tables(metas: Collection[EntityMeta], tables: Mapping[str, str]) -> None:

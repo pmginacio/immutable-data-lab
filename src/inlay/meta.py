@@ -55,6 +55,18 @@ def metas(entities: Iterable[type]) -> frozendict[type, EntityMeta]:
     return found
 
 
+def reachable(cls: type) -> list[EntityMeta]:
+    """The meta of `cls` and of every class its `Ref`s reach, through other classes too, each once."""
+    found: dict[type, EntityMeta] = {}
+    todo = [cls]
+    while todo:
+        c = todo.pop()
+        if c not in found:
+            m = found[c] = meta(c)
+            todo.extend(f.target for f in m.fields if f.target is not None)
+    return list(found.values())
+
+
 def table_name(class_name: str) -> str:
     name = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", class_name)
     return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name).lower()

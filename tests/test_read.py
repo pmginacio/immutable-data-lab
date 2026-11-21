@@ -2,6 +2,7 @@ from dataclasses import replace
 from datetime import UTC, date, datetime
 
 import pytest
+from helpers import opened
 
 import inlay
 import inlay.datoms
@@ -49,7 +50,7 @@ EVENTS = [
 # Every read test also runs against the history experiments, which must read their current data the same way.
 @pytest.fixture(params=[inlay.open, inlay.history.open, inlay.datoms.open], ids=["inlay", "history", "datoms"])
 def db(request, tmp_path):
-    with request.param([Customer, Order, Event], path=tmp_path / "shop.db") as db:
+    with opened(request.param, [Customer, Order, Event], tmp_path / "shop.db") as db:
         db.add(ANA, BOB, CID, *ORDERS, *EVENTS)
         yield db
 

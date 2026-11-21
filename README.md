@@ -167,18 +167,23 @@ class Order:
     total: int
 
 
-# Opens the file and creates the tables and indexes for these two classes if needed.
-# The file is .inlay.db in the current directory, or the one given with path="shop.db".
+# Opens the file: .inlay.db in the current directory, or the one given, as in inlay.open("shop.db").
 # The db is closed at the end of the block, like a file.
-with inlay.open([Customer, Order]) as db:
+with inlay.open() as db:
+    # Creates the tables and indexes of the two classes; it raises if they are there already.
+    # A class goes after the classes it refers to, or in the same call.
+    if Customer not in db:
+        db.register(Customer, Order)
+
     ana = Customer(name="Ana", city="Lisbon")
     bob = Customer(name="Bob", city="Porto")
     # One call can mix classes in the same transaction, and it is all or nothing.
     # A record may refer to another one in the same call.
     db.add(ana, bob, Order(customer=ana.id, total=120), Order(customer=ana.id, total=40))
 
-    # db is a dict[type, Set] so that you can access the db by class type.
-    # Only the classes passed to `inlay.open` are valid keys.
+    # db is like a dict from classes to sets of records, so you access the db by class.
+    # A class with no table in the file raises KeyError, as a missing key does.
+    # The first use of a class checks its table, and creates or drops indexes to match the class.
     orders = db[Order]
     
     # `db[Order]` is the set of all orders, since orders are unique on id, the db behaves as a set.
@@ -199,6 +204,9 @@ with inlay.open([Customer, Order]) as db:
         db.update(*(replace(order, customer=bob.id) for order in db[Order].filter(Order.customer == ana.id)))
         db[Customer].delete(ana.id)
 ```
+
+`Cls in db` tells whether a class has a table, and `del db[Cls]` drops it with its records, unless another table still points to it.
+Several processes that start on a new file at once check and register inside `db.transaction()`, which takes the write lock first, so only one of them creates the tables.
 
 ### Computed values and reports
 
@@ -275,13 +283,12 @@ class LineItem:
     price: int
     qty: int
 
-with inlay.open([Customer, Order, LineItem]) as db:    # the table "order" has the columns id, customer
+with inlay.open() as db:    # the table "order" has the columns id, customer
     ...
 ```
 
 While: the old `Order` stays in the code under another name, because it describes the table as it is stored.
 `Order` gets the new field, and the migration builds each new order from the old one and its line items.
-`LineItem` does not change, but the function reads it, so it is passed as `other_entities`.
 
 ```python
 @entity(indexes=[("customer",)])
@@ -301,10 +308,10 @@ def add_total_amount(db: Db) -> None:
         lines = db[LineItem].filter(LineItem.order == old.id)
         db.add(Order(id=old.id, customer=old.customer, total_amount=lines.sum(LineItem.price * LineItem.qty)))
 
-inlay.migrate(add_total_amount, OrderLegacy, Order, other_entities=[LineItem])    # runs once, and does nothing after that
+inlay.migrate(add_total_amount, OrderLegacy, Order)    # runs once, and does nothing after that
 # ---- end of migration ----
 
-with inlay.open([Customer, Order, LineItem]) as db:
+with inlay.open() as db:
     ...
 ```
 
@@ -317,7 +324,7 @@ class Order:
     customer: Ref[Customer]
     total_amount: int
 
-with inlay.open([Customer, Order, LineItem]) as db:    # the table "order" has the columns id, customer, total_amount
+with inlay.open() as db:    # the table "order" has the columns id, customer, total_amount
     ...
 ```
 
@@ -328,7 +335,7 @@ The file must exist and hold the old table; otherwise `migrate` raises.
 Like `open`, `migrate` and `rename` use `.inlay.db` unless given another `path`.
 
 The new class can also have a name of its own: `inlay.migrate(fn, Order, Purchase)` moves the data to a new table `purchase`, and the foreign keys of the other tables follow.
-The function gets a db with the old class, the new class, and the `other_entities`.
+The function gets a db in which the old class, the new class, and the classes with tables can be used; they are checked against their tables at the end.
 To only rename a class, with no change to its fields, call `inlay.rename("Order", "Purchase")`: it renames the table, its indexes, and the references to it.
 A change that does not alter the schema is not a migration, just an ordinary write.
 
@@ -339,7 +346,8 @@ A change that does not alter the schema is not a migration, just an ordinary wri
 ```python
 import inlay.history
 
-with inlay.history.open([Customer, Order]) as db:    # the file is .inlay-history.db
+with inlay.history.open() as db:                     # the file is .inlay-history.db
+    db.register(Customer, Order)                      # creating tables takes no transaction number
     db.add(ana, order)                                # writes and reads work as above
     db.update(replace(order, total=0))
 
@@ -355,9 +363,10 @@ One difference from the db above: the same key twice in one `update` raises `Alr
 A class cannot be changed yet, so there is no `migrate` or `rename`.
 The design and its limits are in [`notes/2026-11-13-immutable-db.md`](notes/2026-11-13-immutable-db.md).
 
-`inlay.datoms` is a second experiment with the same API and `as_of`: it stores each field of a record as a datom, a row of one table shared by all classes, instead of one row per version.
+`inlay.datoms` is a second experiment with `as_of`, paused for now: it stores each field of a record as a datom, a row of one table shared by all classes, instead of one row per version.
 The library checks keys and references itself, since that table has no constraints, and an update stores only the fields that change.
-Every read rebuilds the records of its class from their datoms, so reads are much slower than in the history db for now.
+Reads of the present use a table of the current values, and a snapshot fills a temporary one on its first read.
+It still takes its classes in `open`, as in `inlay.datoms.open([Customer, Order])`, since it has no table for each class to register.
 
 ## Design
 
@@ -401,7 +410,8 @@ Changing a table while looping over it is refused, because SQLite does not say w
 **Nothing is implicit.**
 Indexes are declared on the class, and a `Ref` must be the first field of one, because SQLite does not index foreign keys on its own.
 Tables are `STRICT`.
-When a class no longer matches its table, `open` raises `SchemaMismatch` and changes nothing.
+Tables are only created by `register`, never by a read or a write.
+When a class no longer matches its table, its first use raises `SchemaMismatch` and changes nothing; only its indexes follow the class by themselves.
 
 **Integrity is checked for the caller.**
 References are checked when a call or a transaction ends, so the order of writes never matters.
@@ -454,6 +464,6 @@ uv run python benchmarks/history.py    # inlay against both history experiments,
 - [`notes/2026-11-13-migrations.md`](notes/2026-11-13-migrations.md) is the design of `migrate` and `rename`, and the discussion that led to it.
 - [`notes/2026-11-13-roadmap.md`](notes/2026-11-13-roadmap.md) is what is open and what comes next.
 - [`notes/2026-11-13-immutable-db.md`](notes/2026-11-13-immutable-db.md) is the design of the two history experiments, `inlay.history`, one table of versions per class, and `inlay.datoms`, one table of datoms, and the plans for schema changes.
-- [`notes/2026-11-21-open-without-classes.md`](notes/2026-11-21-open-without-classes.md) is the design for opening a db without a list of classes, with `db.register`, not built yet.
+- [`notes/2026-11-21-open-without-classes.md`](notes/2026-11-21-open-without-classes.md) is the design for opening a db without a list of classes, with `db.register`.
 - [`notes/2026-11-21-projections.md`](notes/2026-11-21-projections.md) is a design for projections, read-only classes defined by expressions over one stored class, not built yet.
 - [`notes/2026-11-10-immutable-data-and-databases.md`](notes/2026-11-10-immutable-data-and-databases.md) is the background: immutable data, FP style, and database design in Python.

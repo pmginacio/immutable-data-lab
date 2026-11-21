@@ -60,9 +60,22 @@ def create_table_sql(m: EntityMeta, table: str | None = None) -> str:
 
 
 def create_index_sql(m: EntityMeta, index: tuple[FieldMeta, ...]) -> str:
-    name = "__".join((m.table, *(f.name for f in index)))
     columns = ", ".join(map(_column, index))
-    return f"CREATE INDEX IF NOT EXISTS {quote(name)} ON {quote(m.table)} ({columns})"
+    return f"CREATE INDEX IF NOT EXISTS {quote(index_name(m, index))} ON {quote(m.table)} ({columns})"
+
+
+def index_name(m: EntityMeta, index: tuple[FieldMeta, ...]) -> str:
+    """The table's name and the fields', so every index inlay makes for a table starts with the table's name and `__`."""
+    return "__".join((m.table, *(f.name for f in index)))
+
+
+def indexes_sql(m: EntityMeta) -> dict[str, str]:
+    """The CREATE INDEX statement of every index `m` declares, by name."""
+    return {index_name(m, index): create_index_sql(m, index) for index in m.indexes}
+
+
+def drop_index_sql(name: str) -> str:
+    return f"DROP INDEX {quote(name)}"
 
 
 def rename_table_sql(old: str, new: str) -> str:

@@ -3,6 +3,7 @@ from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta, timezone
 
 import pytest
+from helpers import opened
 
 import inlay
 import inlay.datoms
@@ -50,7 +51,7 @@ def open_db(request):
 
 @pytest.fixture
 def db(open_db, tmp_path):
-    with open_db([Customer, Order, Category, Everything], path=tmp_path / "shop.db") as db:
+    with opened(open_db, [Customer, Order, Category, Everything], tmp_path / "shop.db") as db:
         yield db
 
 
@@ -264,19 +265,19 @@ def test_failed_call_inside_a_transaction_writes_nothing(db):
     assert db[Customer].get(bob.id) is None
 
 
-def test_unknown_class(db):
+def test_reading_or_writing_a_class_with_no_table_raises(db):
     @entity
     class Other:
         id: str = key()
 
-    with pytest.raises(KeyError, match="Other was not passed to"):
+    with pytest.raises(KeyError, match="Other"):
         db[Other]
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="Other"):
         db.add(Other())
 
 
 def test_closed_db(open_db, tmp_path):
-    with open_db([Customer], path=tmp_path / "shop.db") as db:
+    with opened(open_db, [Customer], tmp_path / "shop.db") as db:
         pass
     with pytest.raises(sqlite3.ProgrammingError):
         db[Customer].get("x")

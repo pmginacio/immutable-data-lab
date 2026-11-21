@@ -33,6 +33,11 @@ SAVEPOINT = "SAVEPOINT inlay"
 RELEASE = "RELEASE inlay"
 ROLLBACK_TO = "ROLLBACK TO inlay"
 LIST_TABLES = "SELECT name, sql FROM sqlite_master WHERE type = 'table'"
+LIST_INDEXES = "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL"
+REFERRERS = (
+    "SELECT DISTINCT m.name FROM sqlite_master AS m, pragma_foreign_key_list(m.name) AS f "
+    "WHERE m.type = 'table' AND f.\"table\" = ?"
+)
 
 
 def quote(name: str) -> str:
@@ -88,34 +93,36 @@ def create_table_sql(m: EntityMeta) -> str:
     return f"CREATE TABLE {quote(m.table)} ({', '.join(columns)}) STRICT"
 
 
-def create_index_sql(m: EntityMeta, index: tuple[FieldMeta, ...]) -> str:
-    """A declared index with `tx_to` in front, so that reading the current versions is an exact match on its first column."""
-    return _index_sql(m, [f.name for f in index], [quote(_TX_TO), *map(_column, index)])
+def indexes_sql(m: EntityMeta) -> dict[str, str]:
+    """The CREATE INDEX statement of every index of `m`, by name, which is the table's name and the columns'.
 
-
-def version_index_sqls(m: EntityMeta) -> list[str]:
-    """The indexes every class needs: to read all of it, to read one record, and to check references.
-
+    Declared indexes have `tx_to` in front, so that reading the current versions is an exact match on their first column.
+    Every class also gets indexes to read all of it, to read one record, and to check references.
     The key comes before `tx_to`, so finding a current version by key matches both columns,
     and SQLite chooses this index over `(tx_to, tx_from)` without needing statistics.
     SQLite needs an index that starts with the column of a foreign key, or a removal scans the referring table.
     That index leaves out the NULLs of old versions, which the foreign key check never looks for.
     """
-    indexes = [
-        ([_TX_TO, _TX_FROM], [quote(_TX_TO), quote(_TX_FROM)]),
-        ([m.key.name, _TX_TO], [_column(m.key), quote(_TX_TO)]),
-    ]
     lives = [_live(f) for f in m.fields if f.target is not None]
-    return [
-        *(_index_sql(m, names, columns) for names, columns in indexes),
-        *(_index_sql(m, [live], [quote(live)]) + f" WHERE {quote(live)} IS NOT NULL" for live in lives),
+    indexes = [
+        *(([f.name for f in index], [quote(_TX_TO), *map(_column, index)], "") for index in m.indexes),
+        ([_TX_TO, _TX_FROM], [quote(_TX_TO), quote(_TX_FROM)], ""),
+        ([m.key.name, _TX_TO], [_column(m.key), quote(_TX_TO)], ""),
+        *(([live], [quote(live)], f" WHERE {quote(live)} IS NOT NULL") for live in lives),
     ]
+    statements: dict[str, str] = {}
+    for names, columns, where in indexes:
+        name = "__".join((m.table, *names))
+        statements[name] = f"CREATE INDEX IF NOT EXISTS {quote(name)} ON {quote(m.table)} ({', '.join(columns)}){where}"
+    return statements
 
 
-def _index_sql(m: EntityMeta, names: list[str], columns: list[str]) -> str:
-    """An index named after the table and `names`, on `columns`, which are already SQL."""
-    name = "__".join((m.table, *names))
-    return f"CREATE INDEX IF NOT EXISTS {quote(name)} ON {quote(m.table)} ({', '.join(columns)})"
+def drop_index_sql(name: str) -> str:
+    return f"DROP INDEX {quote(name)}"
+
+
+def drop_table_sql(table: str) -> str:
+    return f"DROP TABLE {quote(table)}"
 
 
 def _column_def(f: FieldMeta) -> str:

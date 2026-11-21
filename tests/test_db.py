@@ -4,9 +4,8 @@ from contextlib import closing
 import pytest
 
 import inlay
-import inlay.datoms
 import inlay.history
-from inlay import Ref, SchemaMismatch, entity, key
+from inlay import BrokenRef, Ref, SchemaMismatch, entity, key
 
 
 @entity(indexes=[("city", "name")])
@@ -35,10 +34,10 @@ def schema(path) -> dict[str, str]:
         return dict(conn.execute("SELECT name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'"))
 
 
-def test_open_creates_tables_and_indexes(tmp_path):
+def test_register_creates_tables_and_indexes(tmp_path):
     path = tmp_path / "shop.db"
-    with inlay.open([Customer, Order, Category], path=path):
-        pass
+    with inlay.open(path) as db:
+        db.register(Customer, Order, Category)
     stored = schema(path)
     assert set(stored) == {
         "customer",
@@ -60,43 +59,68 @@ def test_open_creates_tables_and_indexes(tmp_path):
         assert conn.execute("PRAGMA journal_mode").fetchone() == ("wal",)
 
 
-# These also run against the history experiments; datoms checks only its own tables, not one for each class.
-@pytest.fixture(params=[inlay.open, inlay.history.open, inlay.datoms.open], ids=["inlay", "history", "datoms"])
+# These also run against the history db; the datoms version, which is paused, still takes its classes in `open`.
+@pytest.fixture(params=[inlay.open, inlay.history.open], ids=["inlay", "history"])
 def open_db(request):
     return request.param
 
 
-def test_reopen_keeps_the_records_and_can_add_a_class(open_db, tmp_path):
-    path = tmp_path / "shop.db"
+@pytest.fixture
+def path(tmp_path):
+    return tmp_path / "shop.db"
+
+
+def test_a_registered_class_is_there_when_the_file_is_opened_again(open_db, path):
     ana = Customer(name="Ana", city="Lisbon")
-    with open_db([Customer], path=path) as db:
+    with open_db(path) as db:
+        db.register(Customer)
         db.add(ana)
-    with open_db([Customer, Order], path=path) as db:
+    with open_db(path) as db:
+        assert Customer in db
+        assert Order not in db
         assert list(db[Customer]) == [ana]
 
 
 def test_open_without_a_path_uses_a_hidden_file_in_the_current_directory(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    inlay.open([Customer]).close()
+    with inlay.open() as db:
+        db.register(Customer)
     assert "customer" in schema(tmp_path / ".inlay.db")
 
 
-def test_changed_class_raises_and_changes_nothing(open_db, tmp_path):
-    if open_db is inlay.datoms.open:
-        pytest.skip("the datoms version does not check classes against the stored facts yet")
-    path = tmp_path / "shop.db"
-    open_db([Customer], path=path).close()
-
-    renamed_field = entity(type("Customer", (), {"__annotations__": {"id": str, "full_name": str}, "id": key()}))
-
-    with pytest.raises(SchemaMismatch, match="table 'customer' does not match its entity"):
-        open_db([Category, renamed_field], path=path)
-    assert "category" not in schema(path)
+def test_register_raises_for_a_class_with_a_table(open_db, path):
+    with open_db(path) as db:
+        db.register(Customer)
+        with pytest.raises(SchemaMismatch, match="a table is already in this db for Customer"):
+            db.register(Customer)
 
 
-def test_ref_target_must_be_opened_too(open_db, tmp_path):
-    with pytest.raises(TypeError, match=r"not passed to inlay(\.history|\.datoms)?\.open: Order.customer -> Customer"):
-        open_db([Order], path=tmp_path / "shop.db")
+def test_register_needs_the_targets_of_refs_first_or_in_the_same_call(open_db, path):
+    with open_db(path) as db:
+        with pytest.raises(TypeError, match="Customer must be registered first"):
+            db.register(Order)
+        assert Order not in db
+        db.register(Customer)
+        db.register(Order, Category)
+
+
+@entity(indexes=[("manager",)])
+class Department:
+    id: str = key()
+    manager: Ref[Employee]
+
+
+@entity(indexes=[("department",)])
+class Employee:
+    id: str = key()
+    department: Ref[Department]
+
+
+def test_classes_that_point_to_each_other_are_registered_in_one_call(open_db, path):
+    with open_db(path) as db:
+        db.register(Department, Employee)
+        db.add(Department(id="d", manager="e"), Employee(id="e", department="d"))
+        assert [e.id for e in db[Employee]] == ["e"]
 
 
 def another_order() -> type:
@@ -107,6 +131,53 @@ def another_order() -> type:
     return Order
 
 
-def test_two_classes_with_the_same_table_raise(open_db, tmp_path):
-    with pytest.raises(TypeError, match="both use the table 'order'"):
-        open_db([Customer, Order, another_order()], path=tmp_path / "shop.db")
+def test_two_classes_with_the_same_table_raise(open_db, path):
+    with open_db(path) as db, pytest.raises(TypeError, match="Order and .*Order use the same table"):
+        db.register(Order, another_order())
+
+
+def test_a_changed_class_raises_on_first_use(open_db, path):
+    with open_db(path) as db:
+        db.register(Customer)
+    renamed_field = entity(type("Customer", (), {"__annotations__": {"id": str, "full_name": str}, "id": key()}))
+    with open_db(path) as db:
+        assert renamed_field in db
+        with pytest.raises(SchemaMismatch, match="table 'customer' does not match its entity"):
+            db[renamed_field]
+
+
+def test_a_register_that_is_rolled_back_leaves_no_table(open_db, path):
+    with open_db(path) as db:
+        with pytest.raises(RuntimeError), db.transaction():
+            db.register(Customer)
+            db.add(Customer(name="Ana", city="Lisbon"))
+            raise RuntimeError
+        assert Customer not in db
+        with pytest.raises(KeyError, match="no table in this db for Customer"):
+            db[Customer]
+
+
+def test_del_drops_the_table_unless_another_points_to_it(open_db, path):
+    with open_db(path) as db:
+        db.register(Customer, Order)
+        with pytest.raises(BrokenRef, match="tables \\['order'\\] point to it"):
+            del db[Customer]
+        del db[Order]
+        del db[Customer]
+        assert Customer not in db
+        with pytest.raises(KeyError, match="no table in this db for Customer"):
+            del db[Customer]
+
+
+def test_the_indexes_follow_the_class_on_first_use(open_db, path):
+    with open_db(path) as db:
+        db.register(Customer)
+    fewer = entity(indexes=[])(
+        type("Customer", (), {"__annotations__": {"id": str, "name": str, "city": str}, "id": key()})
+    )
+    with open_db(path) as db:
+        db[fewer]
+    assert "customer__city__name" not in schema(path)
+    with open_db(path) as db:
+        db[Customer]
+    assert "customer__city__name" in schema(path)

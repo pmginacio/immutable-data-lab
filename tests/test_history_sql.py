@@ -1,5 +1,5 @@
 from inlay import Ref, entity, key
-from inlay.history.sql import create_index_sql, create_table_sql, version_index_sqls
+from inlay.history.sql import create_table_sql, indexes_sql
 from inlay.meta import meta
 
 CURRENT = "9223372036854775807"
@@ -29,12 +29,9 @@ def test_a_table_holds_versions_and_live_columns_for_the_key_and_references():
 
 
 def test_declared_indexes_start_with_tx_to_and_every_ref_gets_an_index_on_its_live_column():
-    m = meta(Order)
-    assert [create_index_sql(m, i) for i in m.indexes] == [
+    assert list(indexes_sql(meta(Order)).values()) == [
         'CREATE INDEX IF NOT EXISTS "order__customer" ON "order" ("_tx_to", "customer")',
         'CREATE INDEX IF NOT EXISTS "order__total" ON "order" ("_tx_to", "total")',
-    ]
-    assert version_index_sqls(m) == [
         'CREATE INDEX IF NOT EXISTS "order___tx_to___tx_from" ON "order" ("_tx_to", "_tx_from")',
         'CREATE INDEX IF NOT EXISTS "order__id___tx_to" ON "order" ("id", "_tx_to")',
         'CREATE INDEX IF NOT EXISTS "order___live_customer" ON "order" ("_live_customer") '

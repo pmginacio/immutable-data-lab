@@ -120,6 +120,19 @@ def test_the_current_table_holds_the_newest_datom_of_each_field(db, path):
         assert sorted(conn.execute(newest)) == sorted(conn.execute("SELECT * FROM _inlay_current"))
 
 
+def another_order() -> type:
+    @entity
+    class Order:
+        id: str = key()
+
+    return Order
+
+
+def test_two_classes_with_the_same_table_raise(tmp_path):
+    with pytest.raises(TypeError, match="both use the table 'order'"):
+        inlay.datoms.open([Customer, Order, another_order()], path=tmp_path / "other.db")
+
+
 def test_updating_a_record_that_others_refer_to_leaves_them_alone(db, path):
     db.update(replace(ANA, name="Ana B"))
     assert datoms(path, Order) == O1_DATOMS
