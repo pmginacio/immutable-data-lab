@@ -258,6 +258,9 @@ revenue_in_euros = invoices.aggregate_by(to_month(Invoice.at), sum, Invoice.tota
 invoices_per_day = invoices.aggregate_by(to_day(Invoice.at), len)
 # Keyed by the customer's key, for the orders of the example above.
 average_order = db[Order].aggregate_by(Order.customer, avg, Order.total)
+# A value of a referenced record works too, as a key, a value or in `sorted`.
+revenue_per_city = db[Order].aggregate_by(Order.customer.city, sum, Order.total)
+by_customer_name = db[Order].sorted(key=Order.customer.name)
 
 # The same functions work on plain values, so code that loops over records uses them too.
 to_month(datetime(2026, 3, 5, 23, 30))  # date(2026, 3, 1)
@@ -423,7 +426,7 @@ A pure function turns it into SQL, and every value goes in as a parameter:
 
 ```python
 Order.customer.city == "Lisbon"
-# "customer" IN (SELECT "id" FROM "customer" WHERE "city" IS ?)
+# "customer" IN (SELECT "id" FROM "customer" AS "_0" WHERE "city" IS ?)
 ```
 
 `==` becomes SQLite's `IS`, which treats NULL as a value and uses indexes as `=` does, and `negate` counts an unknown result as false first, so conditions keep Python's two values.

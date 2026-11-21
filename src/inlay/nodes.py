@@ -22,7 +22,15 @@ class BinOp:
     right: object
 
 
-type Value = FieldMeta | Call | BinOp
+@dataclass(frozen=True)
+class RefValue:
+    """`value`, read on the record reached by following `refs`, the `Ref` fields in order from the record at hand."""
+
+    refs: tuple[FieldMeta, ...]
+    value: Value
+
+
+type Value = FieldMeta | Call | BinOp | RefValue
 
 
 @dataclass(frozen=True)
@@ -157,7 +165,10 @@ def classes_read(node: Query | Condition) -> set[type]:
             return {cls}
         case Filter(source, cond):
             return classes_read(source) | classes_read(cond)
-        case Sort(source) | Slice(source):
+        case Sort(source, keys):
+            referenced = {r.target for key in keys if isinstance(key, RefValue) for r in key.refs}
+            return classes_read(source) | {t for t in referenced if t is not None}
+        case Slice(source):
             return classes_read(source)
         case In(field, Filter() as records):
             return {field.owner} | classes_read(records)
@@ -184,6 +195,8 @@ def result_type(value: object) -> type:
         case BinOp(op, left, right):
             types = {_number_type(left), _number_type(right)}
             return float if op == "/" or float in types else int
+        case RefValue(_, inner):
+            return result_type(inner)
         case _:
             return type(value)
 
@@ -199,17 +212,21 @@ def describe(value: object) -> str:
     match value:
         case FieldMeta():
             return f"{value.owner.__name__}.{value.name}"
-        case Call() | BinOp():
+        case RefValue(refs, FieldMeta() as field):
+            return ".".join([describe(refs[0]), *(r.name for r in refs[1:]), field.name])
+        case Call() | BinOp() | RefValue():
             return "a computed value"
         case _:
             return repr(value)
 
 
 def value_fields(value: object) -> Iterator[FieldMeta]:
-    """The fields that `value` reads; none for a plain value."""
+    """The fields of the record at hand that `value` reads; none for a plain value."""
     match value:
         case FieldMeta():
             yield value
+        case RefValue(refs):
+            yield refs[0]
         case Call(_, arg):
             yield from value_fields(arg)
         case BinOp(_, left, right):

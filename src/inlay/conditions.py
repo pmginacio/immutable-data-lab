@@ -12,6 +12,7 @@ from inlay.nodes import (
     Filter,
     In,
     Match,
+    RefValue,
     Table,
     Value,
     describe,
@@ -133,15 +134,13 @@ def one_of[T](field: T, values: Iterable[T]) -> Condition:
 
 
 def own_value(cls: type, value: object) -> Value:
-    """The value `value` stands for, which must be computed from fields of `cls` itself.
-
-    `sql.select_sql` and `sql.aggregate_sql` compute it from the columns of the table; a related field would need a join.
-    """
-    relations, v = _parts(value)
-    for field in value_fields(v):
-        if relations or field.owner is not cls:
+    """The value `value` stands for on a record of `cls`: computed from its fields, or read through its `Ref`s."""
+    refs, v = _parts(value)
+    own = RefValue(refs, v) if refs else v
+    for field in value_fields(own):
+        if field.owner is not cls:
             raise ValueError(f"{field.owner.__name__}.{field.name} is not a field of {cls.__name__}")
-    return v
+    return own
 
 
 def _through(relations: tuple[FieldMeta, ...], cond: Condition) -> Condition:

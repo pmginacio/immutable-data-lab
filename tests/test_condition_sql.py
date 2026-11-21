@@ -132,10 +132,11 @@ def test_datetimes_are_stored_as_text():
 
 def test_relations_become_nested_subqueries():
     assert condition_sql(Order.customer.city == "Lisbon") == (
-        '"customer" IN (SELECT "id" FROM "customer" WHERE "city" IS ?)',
+        '"customer" IN (SELECT "id" FROM "customer" AS "_0" WHERE "city" IS ?)',
         ["Lisbon"],
     )
     assert condition_sql(OrderLine.order.customer.city == "Lisbon") == (
-        '"order" IN (SELECT "id" FROM "order" WHERE "customer" IN (SELECT "id" FROM "customer" WHERE "city" IS ?))',
+        '"order" IN (SELECT "id" FROM "order" AS "_0" WHERE "customer" IN '
+        '(SELECT "id" FROM "customer" AS "_0" WHERE "city" IS ?))',
         ["Lisbon"],
     )

@@ -18,10 +18,12 @@ from inlay.nodes import (
     Not,
     Or,
     Query,
+    RefValue,
     Slice,
     Sort,
     Table,
     Value,
+    describe,
 )
 from inlay.types import SQL_TYPES, to_sql
 
@@ -244,6 +246,8 @@ def value_sql(value: object) -> tuple[str, list[object]]:
                 # SQLite divides two integers without a remainder; Python's `/` does not.
                 left_sql = f"CAST({left_sql} AS REAL)"
             return f"({left_sql} {op} {right_sql})", left_params + right_params
+        case RefValue():
+            raise TypeError(f"the history db does not support values read through a Ref yet: {describe(value)}")
         case _:
             return "?", [to_sql(value)]
 

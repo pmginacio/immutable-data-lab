@@ -109,8 +109,6 @@ def test_sorted_needs_fields(db):
     assert list(db[Order].sorted(key=Order.customer)) == by_customer
     with pytest.raises(TypeError, match="expected a field"):
         db[Order].sorted(key="total")
-    with pytest.raises(ValueError, match="Customer.city is not a field of Order"):
-        db[Order].sorted(key=Order.customer.city)
     with pytest.raises(ValueError, match="Customer.name is not a field of Order"):
         db[Order].sorted(key=Customer.name)
 
@@ -233,12 +231,6 @@ def test_aggregate_by_rejects_wrong_arguments(db, mistake, error):
 
 def test_aggregates_compute_in_python_too():
     assert avg([1, 2]) == 1.5
-
-
-def test_aggregates_need_a_field_of_the_class_itself(db):
-    with pytest.raises(ValueError, match="Customer.city is not a field of Order"):
-        db[Order].min(Order.customer.city)
-    assert db[Order].min(Order.customer) == min(o.customer for o in db[Order])
 
 
 def test_only_the_record_set_can_delete(db):

@@ -17,6 +17,7 @@ from inlay.nodes import (
     Not,
     Or,
     Query,
+    RefValue,
     Slice,
     Sort,
     Table,
@@ -222,8 +223,34 @@ def value_sql(value: object) -> tuple[str, list[object]]:
                 # SQLite divides two integers without a remainder; Python's `/` does not.
                 left_sql = f"CAST({left_sql} AS REAL)"
             return f"({left_sql} {op} {right_sql})", left_params + right_params
+        case RefValue(refs, inner):
+            return _ref_value_sql(refs, inner, 0)
         case _:
             return "?", [to_sql(value)]
+
+
+def _ref_value_sql(refs: tuple[FieldMeta, ...], value: Value, outer: int) -> tuple[str, list[object]]:
+    """`value` read through `refs` from the row named by `outer`, with one subquery for each `Ref` followed.
+
+    Each table gets its own name, so the `Ref` column is always read from the outer row,
+    even when both tables are of the same class.
+    """
+    if not refs:
+        return value_sql(value)
+    ref, *rest = refs
+    assert ref.target is not None
+    target = meta(ref.target)
+    sql, params = _ref_value_sql(tuple(rest), value, outer + 1)
+    row, outer_row = _row(outer + 1), _row(outer)
+    return (
+        f"(SELECT {sql} FROM {quote(target.table)} AS {row} WHERE {_column(target.key)} = {outer_row}.{_column(ref)})",
+        params,
+    )
+
+
+def _row(depth: int) -> str:
+    """The name of the row at `depth`: 0 for the records of a SELECT, and one more for each `Ref` followed from them."""
+    return quote(f"_{depth}")
 
 
 def _column(field: FieldMeta) -> str:
@@ -247,7 +274,7 @@ def aggregate_sql(
     parts = [value_sql(k) for k in keys]
     value_part, value_params = ("", []) if value is None else value_sql(value)
     columns = [sql for sql, _ in parts] + [aggregate.sql.format(value_part)]
-    sql = f"SELECT {', '.join(columns)} FROM ({inner})"
+    sql = f"SELECT {', '.join(columns)} FROM ({inner}) AS {_row(0)}"
     if keys:
         # Numbers stand for the columns of the result, so each key and its parameters appear only once.
         positions = ", ".join(str(i) for i in range(1, len(keys) + 1))
@@ -295,7 +322,7 @@ def _open(select: _Select) -> _Select:
 
 
 def _render(select: _Select, columns: str) -> tuple[str, list[object]]:
-    sql = f"SELECT {columns} FROM {select.source}"
+    sql = f"SELECT {columns} FROM {select.source} AS {_row(0)}"
     params = list(select.source_params)
     if select.where:
         where, where_params = condition_sql(select.where[0] if len(select.where) == 1 else And(select.where))
