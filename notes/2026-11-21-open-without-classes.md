@@ -46,9 +46,12 @@ Each operation takes the name and the behaviour of the dict or set operation it 
 - `db[Cls]`, and every write of a class, raise `KeyError` if the class has no table, as a dict does for a missing key and SQL does for a missing table.
   A filter through a `Ref` to a class with no table raises the same way.
   Writing does not create a table: on a plain dict, `d[k].add(x)` raises for a missing key, and only a `defaultdict` creates it.
-- The first time a class with a table is read or written, the db checks the stored table against the class, and the classes its `Ref`s reach, and raises `SchemaMismatch` if one differs.
-  The db remembers the classes it has checked or registered.
-  Inside a transaction they are only remembered once it commits, and a rollback, of the transaction or of a failed call's savepoint, forgets what was not committed, since it also undoes a created table.
+- The db keeps a registry of the classes whose tables it knows are there and match.
+  - A class that is not in it is looked up in the file, with the classes its `Ref`s reach, and added if their tables match; a table that differs raises `SchemaMismatch`.
+    This also finds tables that another process registered.
+  - `register` adds its classes, and `del db[Cls]` removes the class.
+  - Any rollback, of a transaction or of a failed call's savepoint, empties the registry, since it may have undone a `register` or a `del`; the next use of each class looks it up again.
+- Another process dropping or changing a table that this one already knows is not handled: the next statement fails with SQLite's own error, as in any database whose tables are dropped under it.
 - `del db[Cls]` drops the table and its indexes, and raises `BrokenRef` while another table points to it.
   In the history db it drops the history of the class too.
 - `migrate(fn, old, new, path=...)` loses `other_entities`; the db it passes to `fn` checks other classes on first use, as any db does.
