@@ -13,11 +13,11 @@ import tempfile
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import inlay
-from inlay import AlreadyExists, Db, RecordView, Ref, entity, key, one_of
+from inlay import AlreadyExists, Db, Function, RecordView, Ref, entity, key, one_of, to_month
 
 # ---------------------------------------------------------------------------
 # 1. The data
@@ -31,11 +31,14 @@ from inlay import AlreadyExists, Db, RecordView, Ref, entity, key, one_of
 NEW, PAID, CANCELLED = "new", "paid", "cancelled"
 
 
-@entity(indexes=[("city",)])
+# inlay: a field typed `X | None` is optional, and an optional reference is written `Ref[Customer, str | None]`.
+# A class can refer to itself.
+@entity(indexes=[("city",), ("referred_by",)])
 class Customer:
     id: str = key()  # the email address: the app can choose the key
     name: str
     city: str
+    referred_by: Ref[Customer, str | None]
 
 
 @entity(indexes=[("stock",)])
@@ -56,6 +59,7 @@ class Order:
     status: str
     placed: datetime
     total: int  # worked out when the order is placed
+    paid: datetime | None = None
 
 
 @entity(indexes=[("order",), ("product",)])
@@ -106,8 +110,8 @@ def move_to(order: Order, status: str) -> Order:
 # ---------------------------------------------------------------------------
 
 
-def register(db: Db, email: str, name: str, city: str) -> Customer:
-    customer = Customer(id=email.lower(), name=name, city=city)
+def register(db: Db, email: str, name: str, city: str, referred_by: str | None = None) -> Customer:
+    customer = Customer(id=email.lower(), name=name, city=city, referred_by=referred_by)
     try:
         # inlay: `add` refuses a key that exists, and `update` would replace it.
         # The names are the ones `set` and `dict` use.
@@ -140,9 +144,9 @@ def place_order(db: Db, customer_id: str, basket: Mapping[str, int], now: dateti
     return order
 
 
-def pay(db: Db, order_id: str) -> Order:
+def pay(db: Db, order_id: str, now: datetime) -> Order:
     order = get_order(db, order_id)
-    paid = move_to(order, PAID)
+    paid = replace(move_to(order, PAID), paid=now)
     db.update(paid)
     return paid
 
@@ -199,14 +203,37 @@ def waiting_too_long(db: Db, now: datetime) -> RecordView[Order]:
 
 
 def revenue_by_customer(db: Db) -> list[tuple[Customer, int]]:
-    # inlay: there is no GROUP BY. A view is iterable, and it loads one record at a time,
-    # so grouping is ordinary Python over whole records.
+    # inlay: a view is iterable, and it loads one record at a time, so grouping can be ordinary Python.
+    # `aggregate_by`, below, groups inside the db instead.
     revenue = Counter[str]()
     for order in paid_orders(db):
         revenue[order.customer] += order.total
-    # And there is no join either: look the related records up in one query and combine them.
+    # There is no join: look the related records up in one query and combine them.
     customers = {c.id: c for c in db[Customer].filter(one_of(Customer.id, revenue))}
     return [(customers[customer_id], total) for customer_id, total in revenue.most_common()]
+
+
+def orders_per_month(db: Db) -> dict[date, int]:
+    # inlay: functions such as `to_month` work wherever a field does, and `len` counts.
+    return db[Order].aggregate_by(to_month(Order.placed), len)
+
+
+# inlay: a function of your own is written twice, in Python for plain values and in SQL for the db.
+hour = Function("hour", datetime, int, lambda x: x.hour, "CAST(strftime('%H', {}) AS INTEGER)")
+
+
+def orders_per_hour(db: Db) -> dict[int, int]:
+    return db[Order].aggregate_by(hour(Order.placed), len)
+
+
+def revenue_from_referrals(db: Db, customer_id: str) -> int:
+    # inlay: a path can go through an optional reference. A customer that nobody referred matches nothing.
+    return paid_orders(db).filter(Order.customer.referred_by == customer_id).sum(Order.total)
+
+
+def stock_value(db: Db) -> int:
+    # inlay: arithmetic on fields is computed by the db.
+    return db[Product].sum(Product.price * Product.stock)
 
 
 # ---------------------------------------------------------------------------
@@ -224,10 +251,14 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as folder:
         # inlay: `open` opens the file, and `register` creates the tables and indexes of the classes in it,
         # each after the classes it refers to, or with them. The db is closed at the end of the block, like a file.
+        # inlay: `register` raises if a table exists, so an app checks with `in` first. Inside a transaction,
+        # several processes starting on a new file at once do not race to create the tables.
         with inlay.open(Path(folder) / "shop.db") as db:
-            db.register(Customer, Product, Order, OrderLine)
+            with db.transaction():
+                if Customer not in db:
+                    db.register(Customer, Product, Order, OrderLine)
             ana = register(db, "ana@example.com", "Ana", "Lisbon")
-            bob = register(db, "bob@example.com", "Bob", "Porto")
+            bob = register(db, "bob@example.com", "Bob", "Porto", referred_by=ana.id)
             cid = register(db, "cid@example.com", "Cid", "Lisbon")
             db.add(
                 Product(id="keyboard", name="Keyboard", price=5000, stock=10),
@@ -252,11 +283,11 @@ def main() -> None:
             except ShopError as e:
                 print(f"Refused: {e}")
 
-            pay(db, first.id)
-            pay(db, second.id)
+            pay(db, first.id, now + timedelta(hours=5))
+            pay(db, second.id, now + timedelta(hours=6))
             cancel(db, mistake.id)
             try:
-                pay(db, first.id)
+                pay(db, first.id, now + timedelta(hours=7))
             except ShopError as e:
                 print(f"Refused: {e}")
 
@@ -267,12 +298,22 @@ def main() -> None:
             lisbon = orders_in_city(paid_orders(db), "Lisbon")
             # inlay: `len` and `sum` run inside the db and return one number. No record is loaded.
             print(f"\nLisbon: {len(lisbon)} paid orders, {money(lisbon.sum(Order.total))}")
+            print(f"Brought in by Ana's referrals: {money(revenue_from_referrals(db, ana.id))}")
+
+            print("\nOrders per month")
+            for month, count in orders_per_month(db).items():
+                print(f"  {month:%b %Y}  {count}")
+
+            print("\nOrders per hour of the day")
+            for at, count in orders_per_hour(db).items():
+                print(f"  {at:02}:00  {count}")
 
             print("\nAna's latest orders")
-            for order in latest_orders(db, ana.id, size=2):
-                print(f"  {order.placed:%d %b %H:%M}  {order.status:<9} {money(order.total):>8}")
+            for order in latest_orders(db, ana.id, size=3):
+                paid = "not paid" if order.paid is None else f"paid {order.paid:%H:%M}"
+                print(f"  {order.placed:%d %b %H:%M}  {order.status:<9} {money(order.total):>8}  {paid}")
 
-            print("\nLow stock")
+            print(f"\nStock worth {money(stock_value(db))}")
             for product in low_stock(db, at_most=2):
                 print(f"  {product.name:<8} {product.stock} left")
 

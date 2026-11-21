@@ -236,6 +236,7 @@ Sorting puts `None` first, and last in reverse.
 `sum`, `min`, `max` and `avg` skip `None`, and `aggregate_by` groups the records with `None` under the key `None`.
 The key cannot be optional, and other unions, such as `int | str`, are refused.
 Type checkers flag ordering comparisons on an optional field, such as `Order.discount > 1`, because `None > 1` is an error in Python.
+They also flag `= None` as the default of an optional reference, so it is passed explicitly.
 
 ### Computed values and reports
 
