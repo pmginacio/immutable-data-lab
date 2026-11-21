@@ -454,4 +454,5 @@ uv run python benchmarks/history.py    # inlay against both history experiments,
 - [`notes/2026-11-13-migrations.md`](notes/2026-11-13-migrations.md) is the design of `migrate` and `rename`, and the discussion that led to it.
 - [`notes/2026-11-13-roadmap.md`](notes/2026-11-13-roadmap.md) is what is open and what comes next.
 - [`notes/2026-11-13-immutable-db.md`](notes/2026-11-13-immutable-db.md) is the design of the two history experiments, `inlay.history`, one table of versions per class, and `inlay.datoms`, one table of datoms, and the plans for schema changes.
+- [`notes/2026-11-21-projections.md`](notes/2026-11-21-projections.md) is a design for projections, read-only classes defined by expressions over one stored class, not built yet.
 - [`notes/2026-11-10-immutable-data-and-databases.md`](notes/2026-11-10-immutable-data-and-databases.md) is the background: immutable data, FP style, and database design in Python.
