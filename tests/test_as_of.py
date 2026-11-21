@@ -37,8 +37,7 @@ def path(tmp_path):
 # Both history experiments number transactions and read past ones the same way.
 @pytest.fixture(params=[inlay.history.open, inlay.datoms.open], ids=["history", "datoms"])
 def db(request, path):
-    with opened(request.param, [Customer, Order], path) as db:
-        db.add(ANA, O1)
+    with opened(request.param, [Customer, Order], path, [ANA, O1]) as db:
         yield db
 
 

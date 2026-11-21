@@ -347,16 +347,16 @@ A change that does not alter the schema is not a migration, just an ordinary wri
 import inlay.history
 
 with inlay.history.open() as db:                     # the file is .inlay-history.db
-    db.register(Customer, Order)                      # creating tables takes no transaction number
+    db.register(Customer, Order)                      # a transaction like any other, here number 1
     db.add(ana, order)                                # writes and reads work as above
     db.update(replace(order, total=0))
 
-    before = db.as_of(1)                              # a transaction number, or a datetime with a timezone
+    before = db.as_of(2)                              # a transaction number, or a datetime with a timezone
     before[Order].filter(Order.total > 100)           # the same reads, as of that transaction
     before.add(order)                                 # AttributeError: a snapshot cannot be written
 ```
 
-`db.tx` is the number of the latest committed transaction, and 0 before the first write.
+`db.tx` is the number of the latest committed transaction, and 0 before the first one.
 An update or a removal ends the current version of a record and keeps it.
 SQLite still checks keys and references, so a current order must refer to a current customer.
 One difference from the db above: the same key twice in one `update` raises `AlreadyExists`, where inlay keeps the last record.

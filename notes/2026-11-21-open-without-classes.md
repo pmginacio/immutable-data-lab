@@ -57,7 +57,8 @@ Each operation takes the name and the behaviour of the dict or set operation it 
 - `migrate(fn, old, new, path=...)` loses `other_entities`.
   The db it passes to `fn` checks nothing on first use, since the tables change shape until the end, and checks the classes `fn` used once the old table is gone.
   `Db` takes its first-use check as a parameter for that.
-- In the history db, `register` and `del db[Cls]` take no transaction number, since they change no record.
+- In the history db, `register` and `del db[Cls]` take a transaction number like any other transaction.
+  Keeping numbers for record changes only was tried, and set aside for the code it needed.
 - There is no list of the classes in a db.
   The file stores table names, not classes, and finding the class of a table would need a registry of every `@entity` class, which is global state: redefining a class, in a notebook or a test, gives two classes for one table, and what the list holds would depend on which modules are imported.
   Nothing needs it yet.

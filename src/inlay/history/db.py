@@ -243,7 +243,7 @@ class Db:
         """Drops the table of `cls`, with its whole history. Raises `BrokenRef` while another table points to it."""
         m = meta(cls)
         _check_idle(self._reading, [cls])
-        with _transaction(self._conn, self._known, _TABLES_ONLY):
+        with _transaction(self._conn, self._known):
             if m.table not in self._tables():
                 raise KeyError(f"no table in this db for {cls.__name__}")
             referrers = [t for (t,) in self._conn.execute(REFERRERS, (m.table,)) if t != m.table]
@@ -258,7 +258,7 @@ class Db:
         Each class its `Ref`s point to must have a table already, or be one of `classes`.
         """
         metas = [meta(c) for c in classes]
-        with _transaction(self._conn, self._known, _TABLES_ONLY):
+        with _transaction(self._conn, self._known):
             tables = self._tables()
             if stored := [m.cls.__name__ for m in metas if m.table in tables]:
                 raise SchemaMismatch(f"a table is already in this db for {', '.join(stored)}")
@@ -275,7 +275,7 @@ class Db:
 
     @property
     def tx(self) -> int:
-        """The number of the latest committed transaction, or 0 before the first write.
+        """The number of the latest committed transaction, or 0 before the first one.
 
         A transaction is only recorded as it commits, so one that is still open is never counted.
         """
@@ -397,23 +397,18 @@ def _check_idle(reading: Counter[type], classes: Iterable[type]) -> None:
 
 
 # A new transaction records itself, with its number and time, just before it commits; a savepoint is part of it.
-# One that only changes tables takes no number, since no record changes. ROLLBACK TO leaves the savepoint open,
-# so it is released as well.
+# ROLLBACK TO leaves the savepoint open, so it is released as well.
 _TOP_LEVEL = (BEGIN, (RECORD_TX, COMMIT), ROLLBACK)
-_TABLES_ONLY = (BEGIN, COMMIT, ROLLBACK)
 _NESTED = (SAVEPOINT, RELEASE, (ROLLBACK_TO, RELEASE))
 
 
 @contextmanager
-def _transaction(
-    conn: sqlite3.Connection, known: set[type], top_level: tuple[str | tuple[str, ...], ...] = _TOP_LEVEL
-) -> Iterator[None]:
+def _transaction(conn: sqlite3.Connection, known: set[type]) -> Iterator[None]:
     """Runs a new transaction, or a savepoint inside an open one, so a failed call leaves nothing behind.
 
-    `top_level` is how a new transaction begins, ends and undoes itself.
     A rollback empties `known`, the classes the db found in the file, since it may have undone a change to the tables.
     """
-    begin, end, undo = _NESTED if conn.in_transaction else top_level
+    begin, end, undo = _NESTED if conn.in_transaction else _TOP_LEVEL
     with _store_errors():
         _execute(conn, begin)
         try:

@@ -5,6 +5,7 @@ from contextlib import closing
 from dataclasses import replace
 
 import pytest
+from helpers import opened
 
 import inlay.history
 from inlay import AlreadyExists, Missing, Ref, entity, key
@@ -37,9 +38,7 @@ def path(tmp_path):
 
 @pytest.fixture
 def db(path):
-    with inlay.history.open(path) as db:
-        db.register(Customer, Order)
-        db.add(ANA, O1)
+    with opened(inlay.history.open, [Customer, Order], path, [ANA, O1]) as db:
         yield db
 
 
