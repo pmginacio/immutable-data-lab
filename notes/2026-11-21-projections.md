@@ -44,14 +44,17 @@ This note is about the first kind.
         site: str = Event.asset.site
         day: date = to_day(Event.at)
 
-    rows = db[EventRow].filter(EventRow.site == "north").sorted(key=EventRow.at)[:50]
-    rows = db[Event].filter(Event.kind == "alarm").project(EventRow)
+    rows = db[Event].filter(Event.kind == "alarm").project(EventRow).filter(EventRow.site == "north").sorted(key=EventRow.at)[:50]
 
 - A projection is a frozen dataclass with one root class, an `@entity`.
 - A field with the same name as a field of the root takes it; any other field names a value inlay can compile: a path through a `Ref`, a function, arithmetic.
+  A path through an empty optional `Ref` gives `None`, so its field must be typed `X | None`.
 - `@projection` checks each annotation against the type of its value when the class is defined, and raises `TypeError` if they differ.
-- `db[EventRow]` is a read-only view: filters, sorting, slices, `len`, the aggregates and `aggregate_by` work on its fields, and it has no writes.
-- `view.project(EventRow)` turns a view of the root, filtered on any of its fields, into a view of the projection; `db[EventRow]` is `db[Event].project(EventRow)`.
+- `view.project(EventRow)` turns a view of the root into a read-only view of the projection: filters, sorting, slices, `len`, the aggregates and `aggregate_by` work on its fields, and it has no writes.
+- Conditions on the root and on paths from it go before `project`, and conditions on the projection's fields after it; a projected view refuses conditions on the root.
+  It is all one lazy query, so the order costs nothing, and the call shows which class each condition is on.
+- A projection is not in `db`: `db[EventRow]`, `EventRow in db` and `register(EventRow)` have no meaning, since it has no table.
+  Its root and the classes its paths reach are checked on their first use, as any class is.
 - A snapshot of the history db reads a projection at its transaction, since it reads the root there.
 
 ### The root
@@ -80,10 +83,11 @@ That comes when filters on related fields turn out slow.
 - Several rows for one record of the root, such as an event for each of its tags: a join that multiplies rows changes what a row means.
 - Values from the other side of a relation, such as the number of events of an asset, which needs reverse relations.
 - Projections with one row per group; `aggregate_by` covers the common case.
-- Empty values: a path through a `Ref` cannot be empty until inlay has optional fields, which real API data needs.
+- Conditions on the root after `project`.
+  If projections compile by replacing their fields with their values, every condition becomes one on the root, so allowing them would cost little.
 
 ## Related roadmap items
 
-- Optional fields, which should come first.
+- Optional fields, done on 2026-11-21, so a path through a `Ref` can be empty.
 - Reverse relations, for projections rooted on the side with one record.
 - Conditions on groups, several aggregates in one query, and the first N groups by their aggregate, for grouped endpoints.
