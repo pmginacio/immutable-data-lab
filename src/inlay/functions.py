@@ -63,7 +63,8 @@ avg = Aggregate("avg", statistics.fmean, "AVG({})", arg=int | float, result=floa
 # The built-ins that can be used as aggregates, so users write `sum` rather than an inlay name.
 _BUILTIN_AGGREGATES: dict[object, Aggregate[Any]] = {
     len: Aggregate("len", lambda values: sum(1 for _ in values), "COUNT(*)", arg=None, result=int),
-    sum: Aggregate("sum", sum, "SUM({})", arg=int | float),
+    # SQL gives NULL for no values, and Python 0.
+    sum: Aggregate("sum", sum, "coalesce(SUM({}), 0)", arg=int | float),
     min: Aggregate("min", min, "MIN({})", arg=object),
     max: Aggregate("max", max, "MAX({})", arg=object),
 }

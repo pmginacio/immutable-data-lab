@@ -127,5 +127,5 @@ def test_aggregates_cover_only_the_slice(conn):
 def test_aggregates_of_nothing(conn):
     nothing = Filter(CUSTOMERS, Customer.city == "Nowhere")
     assert aggregate(conn, nothing, len) == 0
-    assert aggregate(conn, nothing, sum, AGE) is None
+    assert aggregate(conn, nothing, sum, AGE) == 0
     assert aggregate(conn, nothing, min, AGE) is None

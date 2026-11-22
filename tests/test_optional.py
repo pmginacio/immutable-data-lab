@@ -94,6 +94,12 @@ def test_aggregates_skip_none_and_group_it_under_none(db):
     assert orders.aggregate_by(Order.discount, len) == {None: 2, 5: 1}
 
 
+def test_values_that_are_all_none_sum_to_0_and_have_no_min(db):
+    assert db[Order].aggregate_by(Order.customer, sum, Order.discount) == {None: 0, "ana": 5, "nowhere": 0}
+    assert db[Order].aggregate_by(Order.customer, max, Order.discount) == {None: None, "ana": 5, "nowhere": None}
+    assert db[Order].filter(Order.customer == "nowhere").max(Order.discount) is None
+
+
 def test_the_key_cannot_be_optional():
     with pytest.raises(TypeError, match="is the key and must be a str"):
 

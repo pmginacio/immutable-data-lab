@@ -171,14 +171,11 @@ def test_min_and_max(db):
     assert db[Event].min(Event.at) == datetime(2026, 1, 1, tzinfo=UTC)
 
 
-def test_min_and_max_of_nothing_need_a_default(db):
+def test_min_and_max_of_nothing_give_none_or_the_default(db):
     nothing = db[Order].filter(Order.total > 999)
-    with pytest.raises(ValueError, match="min.. of an empty view"):
-        nothing.min(Order.total)
-    with pytest.raises(ValueError, match="max.. of an empty view"):
-        nothing.max(Order.total)
+    assert nothing.min(Order.total) is None
+    assert nothing.max(Order.total) is None
     assert nothing.min(Order.total, default=0) == 0
-    assert nothing.max(Order.total, None) is None
 
 
 def test_aggregates_of_computed_values(db):

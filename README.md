@@ -268,6 +268,7 @@ avg([1, 2])                             # 1.5
 ```
 
 `aggregate_by` takes the built-ins `len`, `sum`, `min` and `max`, and inlay's `avg` for what Python lacks.
+With no values, in an empty view or a group whose values are all `None`, `sum` gives 0 and the others give `None`, or the `default` given to `min` and `max`.
 Groups with no records are left out, as in a `Counter`, and a key can be a tuple of values, as in `sorted`.
 
 ### Your own functions

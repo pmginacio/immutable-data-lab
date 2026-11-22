@@ -78,9 +78,6 @@ class BrokenRef(StoreError):
     pass
 
 
-_MISSING = object()
-
-
 @dataclass(frozen=True, eq=False)
 class RecordView[T]:
     """A lazy, read-only collection of records. Every read runs its query again."""
@@ -143,20 +140,20 @@ class RecordView[T]:
     def sum(self, value: float) -> float: ...
     def sum(self, value: Any) -> Any:
         aggregate = aggregate_of(sum)
-        return self._aggregate(aggregate, self._aggregated(aggregate, value)) or 0
+        return self._aggregate(aggregate, self._aggregated(aggregate, value))
 
     @overload
-    def min[V](self, value: V) -> V: ...
+    def min[V](self, value: V) -> V | None: ...
     @overload
     def min[V, D](self, value: V, default: D) -> V | D: ...
-    def min(self, value: Any, default: Any = _MISSING) -> Any:
+    def min(self, value: Any, default: Any = None) -> Any:
         return self._extreme(min, value, default)
 
     @overload
-    def max[V](self, value: V) -> V: ...
+    def max[V](self, value: V) -> V | None: ...
     @overload
     def max[V, D](self, value: V, default: D) -> V | D: ...
-    def max(self, value: Any, default: Any = _MISSING) -> Any:
+    def max(self, value: Any, default: Any = None) -> Any:
         return self._extreme(max, value, default)
 
     def aggregate_by[K, R](self, key: K, func: Callable[..., R], value: Any = None) -> dict[K, R]:
@@ -193,11 +190,7 @@ class RecordView[T]:
         aggregate = aggregate_of(func)
         own = self._aggregated(aggregate, value)
         result = self._aggregate(aggregate, own)
-        if result is not None:
-            return from_sql(result, result_type(own))
-        if default is _MISSING:
-            raise ValueError(f"{aggregate.name}() of an empty view")
-        return default
+        return default if result is None else from_sql(result, result_type(own))
 
     def _view(self, query: Query) -> "RecordView[T]":
         return RecordView(self._conn, self._open_iterations, query)
