@@ -68,10 +68,7 @@ def entity(cls: type | None = None, /, *, indexes: Sequence[tuple[str, ...]] = (
 def _make_entity(cls: type, indexes: tuple[tuple[str, ...], ...]) -> type:
     new = dataclass(frozen=True, slots=True, kw_only=True)(cls)
     m = _entity_meta(new, indexes)
-    setattr(new, "__inlay__", m)
-    for f in m.fields:
-        setattr(new, f.name, _Field(new.__dict__[f.name], f))
-    return new
+    return _with_fields(new, "__inlay__", m, m)
 
 
 @dataclass_transform(frozen_default=True, kw_only_default=True)
@@ -84,23 +81,13 @@ def projection[C](root: type) -> Callable[[type[C]], type[C]]:
     root_meta = meta(root)
 
     def wrap(cls: type) -> type:
+        # The values are taken out first, so that dataclass does not make them defaults.
         values = {name: v for name, v in vars(cls).items() if isinstance(v, Expr)}
         for name in values:
-            delattr(cls, name)  # so that dataclass does not take them as defaults
+            delattr(cls, name)
         new = dataclass(frozen=True, slots=True, kw_only=True)(cls)
-        hints = get_annotations(new)
-        found = [_projected(new, root_meta, f.name, hints[f.name], values) for f in fields(new)]
-        field_metas = tuple(fm for fm, _ in found)
-        if not any(fm.is_key for fm in field_metas):
-            raise TypeError(f"{new.__name__} needs a field with the key of {root.__name__}, {root_meta.key.name}")
-        if clashes := [fm.name for fm in field_metas if fm.name in _EXPR_METHODS]:
-            names = ", ".join(clashes)
-            raise TypeError(f"{new.__name__} cannot have fields named {names}: field references use these names")
-        m = EntityMeta(new, "", field_metas, ())  # no table: its rows come from a SELECT of the root
-        setattr(new, "__inlay_projection__", Projection(root, m, tuple(v for _, v in found)))
-        for fm in field_metas:
-            setattr(new, fm.name, _Field(new.__dict__[fm.name], fm))
-        return new
+        p = _projection(new, root_meta, values)
+        return _with_fields(new, "__inlay_projection__", p, p.m)
 
     return wrap
 
@@ -110,6 +97,25 @@ def projection_of(cls: type) -> Projection:
     if not isinstance(p, Projection):
         raise TypeError(f"{cls.__name__} is not a @projection class")
     return p
+
+
+def _with_fields(cls: type, attribute: str, description: object, m: EntityMeta) -> type:
+    """`cls` with `description` stored as `attribute`, and each field of `m` an `Expr` on the class."""
+    setattr(cls, attribute, description)
+    for f in m.fields:
+        setattr(cls, f.name, _Field(cls.__dict__[f.name], f))
+    return cls
+
+
+def _projection(cls: type, root: EntityMeta, values: dict[str, Expr]) -> Projection:
+    hints = get_annotations(cls)
+    found = [_projected(cls, root, f.name, hints[f.name], values) for f in fields(cls)]
+    field_metas = tuple(fm for fm, _ in found)
+    if not any(fm.is_key for fm in field_metas):
+        raise TypeError(f"{cls.__name__} needs a field with the key of {root.cls.__name__}, {root.key.name}")
+    _check_names(cls.__name__, field_metas)
+    m = EntityMeta(cls, "", field_metas, ())  # no table: its rows come from a SELECT of the root
+    return Projection(root.cls, m, tuple(v for _, v in found))
 
 
 def _projected(owner: type, root: EntityMeta, name: str, hint: Any, values: dict[str, Expr]) -> tuple[FieldMeta, Value]:
@@ -175,8 +181,7 @@ def _check(cls_name: str, field_metas: tuple[FieldMeta, ...], indexes: tuple[tup
     if keys[0].py_type is not str or keys[0].ref is not None or keys[0].optional:
         raise TypeError(f"{cls_name}.{keys[0].name} is the key and must be a str")
 
-    if clashes := [f.name for f in field_metas if f.name in _EXPR_METHODS]:
-        raise TypeError(f"{cls_name} cannot have fields named {', '.join(clashes)}: field references use these names")
+    _check_names(cls_name, field_metas)
 
     for index in indexes:
         if not index:
@@ -191,3 +196,8 @@ def _check(cls_name: str, field_metas: tuple[FieldMeta, ...], indexes: tuple[tup
             raise TypeError(
                 f"{cls_name}.{f.name} is a Ref but no index starts with it; add ({f.name!r},) to indexes"
             )
+
+
+def _check_names(cls_name: str, field_metas: tuple[FieldMeta, ...]) -> None:
+    if clashes := [f.name for f in field_metas if f.name in _EXPR_METHODS]:
+        raise TypeError(f"{cls_name} cannot have fields named {', '.join(clashes)}: field references use these names")
