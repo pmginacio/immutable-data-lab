@@ -208,11 +208,11 @@ class RecordView[T]:
 class RecordSet[T](RecordView[T]):
     """All the records of one class. Unlike a view, it can also delete."""
 
-    _known: set[type] = field(kw_only=True)  # the db's, which a rollback empties
+    _transaction: Callable[[], AbstractContextManager[None]] = field(kw_only=True)  # the db's
 
     def delete(self, *keys: str) -> None:
         _raise_if_iterating(self._open_iterations, [self._meta.cls])
-        with _transaction(self._conn, self._known):
+        with self._transaction():
             deleted = self._conn.executemany(delete_by_key_sql(self._meta), ((k,) for k in keys)).rowcount
             if deleted != len(keys):
                 raise Missing(f"{len(keys) - deleted} of the {self._meta.cls.__name__} keys are not stored")
@@ -222,7 +222,7 @@ class RecordSet[T](RecordView[T]):
         check_condition(self._meta.cls, cond)
         sql, params = clear_sql(self._meta, cond)
         _raise_if_iterating(self._open_iterations, [self._meta.cls])
-        with _transaction(self._conn, self._known):
+        with self._transaction():
             self._conn.execute(sql, params)
 
 
@@ -236,7 +236,7 @@ class Db:
 
     def __getitem__[T](self, cls: type[T]) -> RecordSet[T]:
         """The records of `cls`. Raises `KeyError` if it has no table, and `SchemaMismatch` if its table differs."""
-        return RecordSet(self._conn, self._open_iterations, Table(self._checked(cls).cls), _known=self._known)
+        return RecordSet(self._conn, self._open_iterations, Table(self._checked(cls).cls), _transaction=self.transaction)
 
     def __contains__(self, cls: type) -> bool:
         """Whether `cls` has a table, even one that differs from it."""
@@ -246,7 +246,7 @@ class Db:
         """Drops the table of `cls` and its records. Raises `BrokenRef` while another table points to it."""
         m = meta(cls)
         _raise_if_iterating(self._open_iterations, [cls])
-        with _transaction(self._conn, self._known):
+        with self.transaction():
             if m.table not in self._tables():
                 raise KeyError(f"no table in this db for {cls.__name__}")
             if referrers := self._referrers(m.table):
@@ -260,7 +260,7 @@ class Db:
         Each class its `Ref`s point to must have a table already, or be one of `classes`.
         """
         metas = list(entity_metas(classes).values())  # raises if two of them use the same table
-        with _transaction(self._conn, self._known):
+        with self.transaction():
             tables = self._tables()
             if stored := [m.cls.__name__ for m in metas if m.table in tables]:
                 raise SchemaMismatch(f"a table is already in this db for {', '.join(stored)}")
@@ -282,7 +282,7 @@ class Db:
         old_meta, new_meta = meta(old), meta(new)
         if old_meta.table == new_meta.table:
             raise ValueError(f"{old.__name__} and {new.__name__} use the same table; give the old class another name")
-        with _transaction(self._conn, self._known):
+        with self.transaction():
             stored = self._tables().get(new_meta.table)
             if stored == create_table_sql(new_meta):
                 return
@@ -351,7 +351,7 @@ class Db:
         _raise_if_iterating(self._open_iterations, groups)
         # Checked before the transaction, so a failed write does not undo the indexes a first check creates.
         metas = [self._checked(cls) for cls in groups]
-        with _transaction(self._conn, self._known):
+        with self.transaction():
             for m, group in zip(metas, groups.values(), strict=True):
                 write(self._conn, m, group)
 
