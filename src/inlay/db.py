@@ -231,7 +231,7 @@ class Db:
 
     def __getitem__[T](self, cls: type[T]) -> RecordSet[T]:
         """The records of `cls`. Raises `KeyError` if it has no table, and `SchemaMismatch` if its table differs."""
-        self._ready(cls)
+        self._require_tables(cls)
         return RecordSet(self._conn, self._open_iterations, Table(cls), _transaction=self.transaction)
 
     def __contains__(self, cls: type) -> bool:
@@ -261,7 +261,7 @@ class Db:
             tables = self._tables()
             if stored := [m.cls.__name__ for m in new.values() if m.table in tables]:
                 raise SchemaMismatch(f"a table is already in this db for {', '.join(stored)}")
-            self._ready(*targets)  # raises if one has no table, or one that differs from it
+            self._require_tables(*targets)
             _execute(self._conn, (create_table_sql(m) for m in new.values()))
             _execute(self._conn, (sql for m in new.values() for sql in indexes_sql(m).values()))
             self._known.update(new)
@@ -322,7 +322,7 @@ class Db:
                     _execute(self._conn, reprefix_index_sql(name, sql, old_table, m.table))
             # Classes found matching the old table, or reaching it through a `Ref`, no longer do.
             self._known.clear()
-            self._ready(new)
+            self._require_tables(new)
 
     def transaction(self) -> AbstractContextManager[None]:
         return _transaction(self._conn, self._known)
@@ -350,10 +350,11 @@ class Db:
     ) -> None:
         self.close()
 
-    def _ready(self, *classes: type) -> None:
-        """On first use, checks the tables of `classes` and of the classes their `Ref`s reach, and fixes their indexes.
+    def _require_tables(self, *classes: type) -> None:
+        """Raises unless `classes`, and the classes their `Ref`s reach, have tables that match them.
 
-        It creates the declared indexes that are missing, and drops the ones inlay made that are no longer declared.
+        Each class is looked up once. Its first use also creates the declared indexes that are missing,
+        and drops the ones inlay made that are no longer declared.
         """
         metas = {m.cls: m for c in classes if c not in self._known for m in reachable(c)}
         if not metas:
@@ -378,7 +379,7 @@ class Db:
         groups = _grouped(objs)
         _raise_if_iterating(self._open_iterations, groups)
         # Before the transaction, so a failed write does not undo the indexes a first use creates.
-        self._ready(*groups)
+        self._require_tables(*groups)
         with self.transaction():
             for cls, group in groups.items():
                 write(self._conn, meta(cls), group)
