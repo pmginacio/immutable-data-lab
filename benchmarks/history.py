@@ -142,7 +142,9 @@ def history_reads(open_db: Callable[..., HistoryDb], path: Path, w: Workload) ->
     """Reads now and at three past transactions, and `as_of` with the time of each."""
     with open_shop(open_db, path) as db:
         results = reads(lambda: db[Order], w, "now")
-        points = {"the first": 1, "a middle": 1 + len(w.rounds) // 2, "the latest": db.tx}
+        # The history db registers its classes in a transaction of their own, before the first write.
+        first = 2 if open_db is inlay.history.open else 1
+        points = {"the first": first, "a middle": first + len(w.rounds) // 2, "the latest": db.tx}
         with closing(sqlite3.connect(path)) as conn:
             at = 'SELECT "at" FROM "_inlay_tx" WHERE "tx" = ?'
             times = {name: conn.execute(at, (tx,)).fetchone()[0] for name, tx in points.items()}
