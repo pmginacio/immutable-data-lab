@@ -18,7 +18,7 @@ from inlay.nodes import (
     Not,
     Or,
     Project,
-    Query,
+    Node,
     RefValue,
     Slice,
     Sort,
@@ -248,7 +248,7 @@ def _column(field: FieldMeta) -> str:
     return quote(field.name)
 
 
-def select_sql(query: Query) -> tuple[str, list[object]]:
+def select_sql(query: Node) -> tuple[str, list[object]]:
     """A SELECT of every column of the records `query` picks, and its parameters in order."""
     select = _select(query)
     return _render(select, _columns(select.m))
@@ -259,7 +259,7 @@ _GROUP_VALUE = quote("_inlay_value")
 
 
 def aggregate_sql(
-    query: Query, aggregate: Aggregate[Any], value: Value | None = None, keys: tuple[Value, ...] = ()
+    query: Node, aggregate: Aggregate[Any], value: Value | None = None, keys: tuple[Value, ...] = ()
 ) -> tuple[str, list[object]]:
     """`aggregate` over the records `query` picks, of `value` if it takes one.
 
@@ -290,7 +290,7 @@ class _Select:
     slice: tuple[int, int | None] | None = None
 
 
-def _select(query: Query) -> _Select:
+def _select(query: Node) -> _Select:
     match query:
         case Table(cls):
             m = meta(cls)

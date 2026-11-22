@@ -19,7 +19,7 @@ from inlay.nodes import (
     Not,
     Or,
     Project,
-    Query,
+    Node,
     RefValue,
     Slice,
     Sort,
@@ -260,7 +260,7 @@ def _column(field: FieldMeta) -> str:
     return quote(field.name)
 
 
-def select_sql(query: Query, tx: int | None) -> tuple[str, list[object]]:
+def select_sql(query: Node, tx: int | None) -> tuple[str, list[object]]:
     """A SELECT of every column of the records `query` picks at transaction `tx`, and its parameters in order.
 
     With no `tx`, it picks from the current records.
@@ -270,7 +270,7 @@ def select_sql(query: Query, tx: int | None) -> tuple[str, list[object]]:
 
 
 def aggregate_sql(
-    query: Query,
+    query: Node,
     tx: int | None,
     aggregate: Aggregate[Any],
     value: Value | None = None,
@@ -308,7 +308,7 @@ class _Select:
     slice: tuple[int, int | None] | None = None
 
 
-def _select(query: Query, tx: int | None) -> _Select:
+def _select(query: Node, tx: int | None) -> _Select:
     match query:
         case Table(cls):
             m = meta(cls)

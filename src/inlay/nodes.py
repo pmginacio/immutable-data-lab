@@ -37,7 +37,7 @@ class GroupValue:
     It is what `aggregate_by` gives for those keys, and None when no record of `source` has them.
     """
 
-    source: Query
+    source: Node
     aggregate: Aggregate[Any]
     value: Value | None
     keys: tuple[Value, ...]
@@ -54,7 +54,7 @@ class Table:
 
 @dataclass(frozen=True)
 class Filter:
-    source: Query
+    source: Node
     cond: Condition
 
 
@@ -62,14 +62,14 @@ class Filter:
 class Sort:
     """`source` sorted by `keys`, like the built-in `sorted`: ties keep the order of `source`."""
 
-    source: Query
+    source: Node
     keys: tuple[Value, ...]
     reverse: bool
 
 
 @dataclass(frozen=True)
 class Slice:
-    source: Query
+    source: Node
     start: int
     stop: int | None
 
@@ -87,11 +87,11 @@ class Projection:
 class Project:
     """The records of `source`, a filtered view of the root of `projection`, in the shape of the projection."""
 
-    source: Query
+    source: Node
     projection: Projection
 
 
-type Query = Table | Filter | Sort | Slice | Project
+type Node = Table | Filter | Sort | Slice | Project
 
 
 class Condition:
@@ -181,7 +181,7 @@ def check_condition(cls: type, cond: Condition) -> None:
             raise ValueError(f"{field.owner.__name__}.{field.name} cannot be used on {cls.__name__}")
 
 
-def record_meta(query: Query) -> EntityMeta:
+def record_meta(query: Node) -> EntityMeta:
     """What the records of `query` are: an entity, or a projection."""
     match query:
         case Table(cls):
@@ -192,7 +192,7 @@ def record_meta(query: Query) -> EntityMeta:
             return record_meta(source)
 
 
-def classes_read(node: Query | Condition) -> set[type]:
+def classes_read(node: Node | Condition) -> set[type]:
     """The classes whose tables are read to run `node`, including those reached through `In`."""
     match node:
         case Table(cls):

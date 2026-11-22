@@ -18,7 +18,7 @@ from inlay.nodes import (
     Filter,
     GroupValue,
     Project,
-    Query,
+    Node,
     Slice,
     Sort,
     Table,
@@ -86,7 +86,7 @@ class RecordView[T]:
 
     _conn: sqlite3.Connection
     _open_iterations: Counter[type]
-    _query: Query
+    _query: Node
 
     @property
     def _meta(self) -> EntityMeta:
@@ -201,7 +201,7 @@ class RecordView[T]:
         result = self._aggregate(aggregate, own)
         return default if result is None else from_sql(result, result_type(own))
 
-    def _view(self, query: Query) -> "RecordView[T]":
+    def _view(self, query: Node) -> "RecordView[T]":
         return RecordView(self._conn, self._open_iterations, query)
 
     def _aggregate(self, aggregate: Aggregate[Any], value: Value | None = None) -> Any:
@@ -219,7 +219,7 @@ class Grouped[K, V](Mapping[K, V]):
     """
 
     _conn: sqlite3.Connection
-    _query: Query
+    _query: Node
     _aggregate: Aggregate[Any]
     _value: Value | None
     _keys: tuple[Value, ...]

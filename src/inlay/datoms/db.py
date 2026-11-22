@@ -52,7 +52,7 @@ from inlay.nodes import (
     Compare,
     Condition,
     Filter,
-    Query,
+    Node,
     Slice,
     Sort,
     Table,
@@ -76,7 +76,7 @@ class RecordView[T]:
 
     _conn: sqlite3.Connection
     _open_iterations: Counter[type]
-    _query: Query
+    _query: Node
     _tx: int | None = None
 
     @property
@@ -183,7 +183,7 @@ class RecordView[T]:
         result = self._aggregate(aggregate, own)
         return default if result is None else from_sql(result, result_type(own))
 
-    def _view(self, query: Query) -> "RecordView[T]":
+    def _view(self, query: Node) -> "RecordView[T]":
         return RecordView(self._conn, self._open_iterations, query, self._tx)
 
     def _aggregate(self, aggregate: Aggregate[Any], value: Value | None = None) -> Any:
