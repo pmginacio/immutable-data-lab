@@ -25,6 +25,13 @@ A projection class is defined when its module is imported, before any db is open
 So `Current` cannot have `first_seen: datetime | None = first[Sighting.ad]`, and the app stores `first_seen` on `Ad` instead, a copy of what the sightings already say.
 A group value declared on the class, bound to a db when its query runs, would remove the copy, and also let `sorted` keys and conditions be written once at module level.
 
+### Projection fields that hold a referenced record
+
+The passes read every ad with the values of the state it shows and of that state's location.
+The projection that gives them, `Current`, repeats each of those values as its own field, about twenty lines of `price: int | None = Ad.state.price`.
+A field typed as an entity class, such as `state: AdState = Ad.state` and `location: Location = Ad.state.location`, could read all the columns of the referenced record in the same query and build it.
+The passes would read `row.state.price`, the shape of the stored data, and type checkers would know every field without more code.
+
 ### A key that is also a `Ref`
 
 `Annotation` holds the user's marks on an `Ad`, keyed by the ad's key, so that the dedup pass, which rewrites ads, never touches them.
