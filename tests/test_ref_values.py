@@ -72,6 +72,12 @@ def test_an_empty_ref_gives_none(db):
     assert ids(db[Customer].sorted(key=Customer.referred_by.name)) == ["ana", "bob", "cid"]
 
 
+def test_a_table_reached_by_a_sort_key_cannot_change_while_looping(db):
+    with pytest.raises(RuntimeError, match="Customer changed during iteration"):
+        for _ in db[Order].sorted(key=Order.customer.name):
+            db.update(RECORDS[0])
+
+
 @pytest.mark.parametrize("open_db", [inlay.history.open, inlay.datoms.open], ids=["history", "datoms"])
 def test_the_paused_history_experiments_refuse_them(open_db, tmp_path):
     # The experiments refuse optional fields too, so they get classes without one.

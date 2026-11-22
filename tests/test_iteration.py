@@ -77,14 +77,6 @@ def test_tables_reached_by_relations_count_too(db):
         db.add(Event(name="fine"))
 
 
-def test_tables_reached_by_sort_keys_count_too(db):
-    if type(db) is not inlay.Db:
-        pytest.skip("the paused experiments refuse values read through a Ref")
-    with pytest.raises(RuntimeError, match="Customer changed during iteration"):
-        for _ in db[Order].sorted(key=Order.customer.name):
-            db.update(ANA)
-
-
 def test_tables_reached_in_the_source_of_a_slice_count_too(db):
     first = db[Order].filter(Order.customer.city == "Lisbon")[:1].sorted(key=Order.total)
     with pytest.raises(RuntimeError, match="Customer changed during iteration"):

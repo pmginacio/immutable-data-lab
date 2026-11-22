@@ -1,5 +1,7 @@
 """Optional fields, typed `X | None`, in inlay. The history experiments are paused and refuse them."""
 
+from datetime import UTC, datetime
+
 import pytest
 
 import inlay
@@ -20,11 +22,12 @@ class Order:
     customer: Ref[Customer, str | None]
     total: int
     discount: int | None = None
+    paid: datetime | None = None
 
 
 ANA = Customer(id="ana", city="Lisbon")
 NOWHERE = Customer(id="nowhere", city=None)
-O1 = Order(id="o1", customer="ana", total=10, discount=5)
+O1 = Order(id="o1", customer="ana", total=10, discount=5, paid=datetime(2026, 11, 1, tzinfo=UTC))
 O2 = Order(id="o2", customer="nowhere", total=20)
 O3 = Order(id="o3", customer=None, total=30)
 
@@ -43,6 +46,7 @@ def ids(view):
 
 def test_none_is_stored_and_read_back(db):
     assert db[Order].get("o3") == O3
+    assert db[Order].get("o1") == O1
     assert db[Customer].get("nowhere") == NOWHERE
 
 
@@ -51,7 +55,7 @@ def test_a_record_with_none_can_be_removed(db):
     assert db[Order].get("o3") is None
 
 
-def test_an_empty_ref_points_nowhere_but_a_ref_to_a_missing_record_still_raises(db):
+def test_a_ref_to_a_missing_record_still_raises(db):
     with pytest.raises(BrokenRef):
         db.add(Order(customer="nobody", total=1))
 

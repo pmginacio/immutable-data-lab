@@ -123,3 +123,11 @@ def test_updating_a_record_that_others_refer_to_leaves_them_alone(db, path):
     assert [o.id for o in db[Order].filter(Order.customer.name == "Ana B")] == ["o1"]
     assert db[Order].filter(Order.customer.name == "Ana").get("o1") is None
     assert versions(path, "order") == [("o1", 1, CURRENT)]
+
+
+def test_register_and_del_each_take_a_transaction(path):
+    with inlay.history.open(path) as db:
+        db.register(Customer)
+        assert db.tx == 1
+        del db[Customer]
+        assert db.tx == 2
