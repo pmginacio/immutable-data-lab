@@ -1,13 +1,13 @@
 import os
 import sqlite3
 from collections import Counter, defaultdict
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, ItemsView, Iterable, Iterator, Mapping, Sequence, ValuesView
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, replace
 from types import TracebackType
-from typing import Any, Self, overload
+from typing import Any, Self, cast, overload
 
-from inlay.conditions import Expr, own_value, record_values
+from inlay.conditions import Expr, group_column, group_condition, own_value, record_values
 from inlay.entity import projection_of, restored
 from inlay.functions import Aggregate, aggregate_of
 from inlay.meta import EntityMeta, FieldMeta, meta, reachable, table_name
@@ -27,8 +27,11 @@ from inlay.nodes import (
     check_condition,
     classes_read,
     describe,
+    group,
+    group_value,
     record_meta,
     result_type,
+    root_group,
 )
 from inlay.sql import (
     BEGIN,
@@ -120,10 +123,7 @@ class Query[T]:
     def __getitem__(self, s: slice) -> "Query[T]":
         if not isinstance(s, slice):
             raise TypeError("a query can only be sliced, as in q[:10]")
-        start, stop = s.start or 0, s.stop
-        if s.step is not None or start < 0 or (stop is not None and stop < 0):
-            raise ValueError("a slice takes a start and a stop, and no negative numbers")
-        return Query(Slice(self._node, start, stop), self._db)
+        return Query(Slice(self._node, *_slice_bounds(s)), self._db)
 
     def filter(self, *conds: Condition | bool) -> "Query[T]":
         cond = all_of(*conds)
@@ -189,7 +189,7 @@ class Query[T]:
         many = isinstance(key, tuple)
         keys = tuple(own_value(self._meta.cls, k) for k in (key if many else (key,)))
         own = None if value is None else self._aggregated(aggregate, value)
-        return Grouped(self._node, aggregate, own, keys, many, self._db)
+        return Grouped(group(self._node, aggregate, own, keys), many, self._db)
 
     def _aggregated(self, aggregate: Aggregate[Any], value: object) -> Value:
         """`value` as a value of the records of this query that `aggregate` can take."""
@@ -216,6 +216,13 @@ def query[T](cls: type[T]) -> Query[T]:
     return Query(Table(meta(cls).cls))
 
 
+def _slice_bounds(s: slice) -> tuple[int, int | None]:
+    start, stop = s.start or 0, s.stop
+    if s.step is not None or start < 0 or (stop is not None and stop < 0):
+        raise ValueError("a slice takes a start and a stop, and no negative numbers")
+    return start, stop
+
+
 def _bound(db: Db | None) -> Db:
     if db is None:
         raise TypeError("this query has no db; run it as db[q]")
@@ -224,48 +231,86 @@ def _bound(db: Db | None) -> Db:
 
 @dataclass(frozen=True, eq=False, repr=False)
 class Grouped[K, V](Mapping[K, V]):
-    """What `aggregate_by` gives: a read-only mapping from each key to its value. Every read runs its query again.
+    """What `aggregate_by` gives: a value for each key, in key order, as a query of groups.
+
+    `filter`, `sorted` and slicing give new groups, as they give new queries; their conditions and sort keys use
+    `value`, and the keys as they were grouped by, as in `totals.filter(totals.value > 100, Order.customer != "c1")`.
+    Bound to a db, it is also a read-only mapping from each key to its value, and every read runs its query again.
 
     Given a field instead of a key, as in `totals[Order.customer]`, it gives the value of each record's own key
     for use in queries, as in `db[Order].filter(Order.total == biggest[Order.customer])`;
-    the value is None for a key with no records.
+    the value is None for a key with no group.
     """
 
-    _query: Node
-    _aggregate: Aggregate[Any]
-    _value: Value | None
-    _keys: tuple[Value, ...]
+    _node: Node  # a `Group`, or a query that filters, sorts or slices one
     _many: bool  # keys are tuples, as `aggregate_by` was given a tuple of values
     _db: Db | None = None
 
-    def __getitem__(self, key: K) -> V:
-        if (found := record_values(key if self._many and isinstance(key, tuple) else (key,))) is None:
-            return self._read()[key]
-        return self._looked_up(*found)
+    @property
+    def value(self) -> V:
+        """The value of each group, for conditions and sort keys."""
+        return cast(Any, Expr((), group_value(self._node)))
+
+    @overload
+    def __getitem__(self, key: slice) -> "Grouped[K, V]": ...
+    @overload
+    def __getitem__(self, key: K) -> V: ...
+    def __getitem__(self, key: Any) -> Any:
+        if isinstance(key, slice):
+            return replace(self, _node=Slice(self._node, *_slice_bounds(key)))
+        if (found := record_values(key if self._many and isinstance(key, tuple) else (key,))) is not None:
+            return self._looked_up(*found)
+        keys = key if self._many else (key,)
+        columns = record_meta(self._node).fields[:-1]
+        if not isinstance(keys, tuple) or len(keys) != len(columns):
+            raise KeyError(key)
+        row = next(self._rows(Filter(self._node, all_of(*map(Compare, columns, ("==",) * len(keys), keys)))), None)
+        if row is None:
+            raise KeyError(key)
+        return row[1]
 
     def __iter__(self) -> Iterator[K]:
         return iter(self._read())
 
     def __len__(self) -> int:
-        return len(self._read())
+        sql, params = aggregate_sql(self._node, aggregate_of(len))
+        return _bound(self._db)._conn.execute(sql, params).fetchone()[0]
+
+    def items(self) -> ItemsView[K, V]:
+        return self._read().items()
+
+    def values(self) -> ValuesView[V]:
+        return self._read().values()
+
+    def filter(self, *conds: Condition | bool) -> "Grouped[K, V]":
+        cond = group_condition(root_group(self._node), all_of(*conds))
+        return replace(self, _node=Filter(self._node, cond))
+
+    def sorted(self, *, key: Any, reverse: bool = False) -> "Grouped[K, V]":
+        """`key` is `value`, a key as it was grouped by, or a tuple of them; ties keep key order."""
+        keys = key if isinstance(key, tuple) else (key,)
+        groups = root_group(self._node)
+        return replace(self, _node=Sort(self._node, tuple(group_column(groups, k) for k in keys), reverse))
 
     def _looked_up(self, relations: tuple[FieldMeta, ...], at: tuple[Value, ...]) -> Any:
-        if len(at) != len(self._keys):
-            raise TypeError(f"the keys are {len(self._keys)} values, got {len(at)}")
-        for value, k in zip(at, self._keys):
-            if (t := result_type(value)) is not result_type(k):
-                raise TypeError(f"{describe(value)} is a {t.__name__}, but the keys are a {result_type(k).__name__}")
-        return Expr(relations, GroupValue(self._query, self._aggregate, self._value, self._keys, at))
+        columns = record_meta(self._node).fields[:-1]
+        if len(at) != len(columns):
+            raise TypeError(f"the keys are {len(columns)} values, got {len(at)}")
+        for value, c in zip(at, columns):
+            if (t := result_type(value)) is not c.py_type:
+                raise TypeError(f"{describe(value)} is a {t.__name__}, but the keys are a {c.py_type.__name__}")
+        return Expr(relations, GroupValue(self._node, at))
+
+    def _rows(self, node: Node) -> Iterator[tuple[Any, Any]]:
+        """The key and value of each group of `node`, in its order; a key is a tuple when there are several."""
+        sql, params = select_sql(node)
+        columns = record_meta(node).fields
+        for row in _bound(self._db)._conn.execute(sql, params):
+            *keys, value = map(from_sql, row, (c.py_type for c in columns))
+            yield (tuple(keys) if self._many else keys[0]), value
 
     def _read(self) -> dict[Any, Any]:
-        sql, params = aggregate_sql(self._query, self._aggregate, self._value, self._keys)
-        key_types = [result_type(k) for k in self._keys]
-        value_type = self._aggregate.result or result_type(self._value)
-        groups = {
-            tuple(map(from_sql, row[:-1], key_types)): from_sql(row[-1], value_type)
-            for row in _bound(self._db)._conn.execute(sql, params)
-        }
-        return groups if self._many else {k: v for (k,), v in groups.items()}
+        return dict(self._rows(self._node))
 
 
 @dataclass(frozen=True, eq=False)
@@ -320,7 +365,7 @@ class Db:
                 self._require_tables(*classes_read(x._node))
                 return Query(x._node, self)
             case Grouped():
-                self._require_tables(*classes_read(x._query))
+                self._require_tables(*classes_read(x._node))
                 return replace(x, _db=self)
         raise TypeError(f"db[...] takes a class, a query or a group, not {x!r}")
 

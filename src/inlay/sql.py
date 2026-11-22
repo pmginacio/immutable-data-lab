@@ -11,7 +11,10 @@ from inlay.nodes import (
     Compare,
     CompareOp,
     Condition,
+    GROUP_KEY,
+    GROUP_VALUE,
     Filter,
+    Group,
     GroupValue,
     In,
     Match,
@@ -209,12 +212,12 @@ def value_sql(value: object) -> tuple[str, list[object]]:
             return f"({left_sql} {op} {right_sql})", left_params + right_params
         case RefValue(refs, inner):
             return _ref_value_sql(refs, inner, 0)
-        case GroupValue(source, aggregate, inner, keys, at):
-            grouped, grouped_params = aggregate_sql(source, aggregate, inner, keys)
+        case GroupValue(groups, at):
+            grouped, grouped_params = select_sql(groups)
             parts = [value_sql(v) for v in at]
             # The columns of `grouped` start with _inlay_, so the fields `at` names are read from the record at hand.
-            match = " AND ".join(f"{_GROUP_KEY.format(i)} IS {sql}" for i, (sql, _) in enumerate(parts))
-            sql = f"(SELECT {_GROUP_VALUE} FROM ({grouped}) WHERE {match})"
+            match = " AND ".join(f"{quote(GROUP_KEY.format(i))} IS {sql}" for i, (sql, _) in enumerate(parts))
+            sql = f"(SELECT {quote(GROUP_VALUE)} FROM ({grouped}) WHERE {match})"
             return sql, grouped_params + [p for _, params in parts for p in params]
         case _:
             return "?", [to_sql(value)]
@@ -254,27 +257,22 @@ def select_sql(query: Node) -> tuple[str, list[object]]:
     return _render(select, _columns(select.m))
 
 
-_GROUP_KEY = quote("_inlay_key{}")
-_GROUP_VALUE = quote("_inlay_value")
-
-
 def aggregate_sql(
     query: Node, aggregate: Aggregate[Any], value: Value | None = None, keys: tuple[Value, ...] = ()
 ) -> tuple[str, list[object]]:
     """`aggregate` over the records `query` picks, of `value` if it takes one.
 
-    With `keys`, one row for each distinct key, sorted by key: the values of `keys`, then the aggregate.
+    With `keys`, one row for each distinct key: the values of `keys`, then the aggregate.
     """
     inner, inner_params = select_sql(query)
     parts = [value_sql(k) for k in keys]
     value_part, value_params = ("", []) if value is None else value_sql(value)
-    columns = [f"{sql} AS {_GROUP_KEY.format(i)}" for i, (sql, _) in enumerate(parts)]
-    columns.append(f"{aggregate.sql.format(value_part)} AS {_GROUP_VALUE}")
+    columns = [f"{sql} AS {quote(GROUP_KEY.format(i))}" for i, (sql, _) in enumerate(parts)]
+    columns.append(f"{aggregate.sql.format(value_part)} AS {quote(GROUP_VALUE)}")
     sql = f"SELECT {', '.join(columns)} FROM ({inner}) AS {_row(0)}"
     if keys:
         # Numbers stand for the columns of the result, so each key and its parameters appear only once.
-        positions = ", ".join(str(i) for i in range(1, len(keys) + 1))
-        sql += f" GROUP BY {positions} ORDER BY {positions}"
+        sql += f" GROUP BY {', '.join(str(i) for i in range(1, len(keys) + 1))}"
     return sql, [p for _, params in parts for p in params] + value_params + inner_params
 
 
@@ -310,6 +308,10 @@ def _select(query: Node) -> _Select:
             columns = ", ".join(f"{sql} AS {_column(f)}" for (sql, _), f in zip(parts, fields, strict=True))
             sql, params = _render(_select(source), columns)
             return _Select(projection.m, f"({sql})", (*(p for _, ps in parts for p in ps), *params))
+        case Group(source, aggregate, value, keys, m):
+            sql, params = aggregate_sql(source, aggregate, value, keys)
+            # In key order unless sorted otherwise, and by key after any other order.
+            return _Select(m, f"({sql})", tuple(params), order=tuple((f, False) for f in m.fields if f.is_key))
 
 
 def _open(select: _Select) -> _Select:

@@ -5,7 +5,7 @@ from datetime import UTC, date, datetime
 import pytest
 
 import inlay
-from inlay import Ref, entity, key, projection, to_month
+from inlay import Ref, entity, key, projection, query, to_month
 
 
 @entity
@@ -74,6 +74,11 @@ def test_a_projected_view_sorts_slices_and_aggregates_by_its_fields(db):
     assert rows.aggregate_by(OrderRow.month, len) == {date(2026, 1, 1): 1, date(2026, 2, 1): 2}
     assert rows.get("o1") == O1
     assert O1 in rows
+
+
+def test_a_projected_query_built_without_a_db_runs_on_one(db):
+    lisbon = query(Order).project(OrderRow).filter(OrderRow.city == "Lisbon")
+    assert ids(db[lisbon]) == ["o1"]
 
 
 def test_sorting_or_slicing_before_it_is_refused(db):

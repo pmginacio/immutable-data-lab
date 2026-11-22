@@ -75,3 +75,33 @@ def test_writing_the_grouped_class_while_looping_is_refused(db):
     with pytest.raises(RuntimeError, match="Order changed during iteration"):
         for _ in db[Customer].filter(totals[Customer.id] > 100):
             db.add(Order(id="o3", customer="bob", total=30))
+
+
+@pytest.fixture
+def totals(db):
+    db.add(Order(id="o3", customer="bob", total=30))
+    return db[Order].aggregate_by(Order.customer, sum, Order.total)
+
+
+def test_groups_are_filtered_by_their_value_and_by_their_keys(totals):
+    assert dict(totals.filter(totals.value > 100)) == {"ana": 200}
+    assert dict(totals.filter(Order.customer != "ana")) == {"bob": 30}
+
+
+def test_groups_are_sorted_and_sliced_and_their_lookups_follow(db, totals):
+    assert list(totals.sorted(key=totals.value)) == ["bob", "ana"]
+    top = totals.sorted(key=totals.value, reverse=True)[:1]
+    assert dict(top) == {"ana": 200}
+    with pytest.raises(KeyError):
+        top["bob"]
+    assert ids(db[Customer].filter(is_none(top[Customer.id]))) == ["bob"]
+
+
+def test_a_group_is_looked_up_by_all_its_keys(db):
+    pairs = db[Order].aggregate_by((Order.customer, Order.total), len)
+    assert (pairs["ana", 150], ("ana", 1) in pairs) == (1, False)
+
+
+def test_a_condition_on_a_field_that_is_not_a_key_is_refused(totals):
+    with pytest.raises(ValueError, match="Order.total is not a key of these groups"):
+        totals.filter(Order.total > 100)

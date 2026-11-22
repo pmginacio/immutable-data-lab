@@ -13,6 +13,7 @@ from inlay.nodes import (
     CompareOp,
     Condition,
     Filter,
+    Group,
     GroupValue,
     In,
     Match,
@@ -327,6 +328,8 @@ def _select(query: Node, tx: int | None) -> _Select:
             return replace(_open(_select(source, tx)), slice=(start, stop))
         case Project():
             raise TypeError("the paused history experiments do not read projections")
+        case Group():
+            raise TypeError("the paused history experiments do not read groups as queries")
 
 
 def _open(select: _Select) -> _Select:

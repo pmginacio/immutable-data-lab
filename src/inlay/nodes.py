@@ -32,15 +32,12 @@ class RefValue:
 
 @dataclass(frozen=True)
 class GroupValue:
-    """`aggregate` of `value` over the records of `source` whose `keys` equal `at`, values of the record at hand.
+    """The value of the group of `groups` whose keys equal `at`, values of the record at hand; None if there is none.
 
-    It is what `aggregate_by` gives for those keys, and None when no record of `source` has them.
+    `groups` is a `Group`, or a query of one that filters, sorts or slices the groups.
     """
 
-    source: Node
-    aggregate: Aggregate[Any]
-    value: Value | None
-    keys: tuple[Value, ...]
+    groups: Node
     at: tuple[Value, ...]
 
 
@@ -91,7 +88,47 @@ class Project:
     projection: Projection
 
 
-type Node = Table | Filter | Sort | Slice | Project
+@dataclass(frozen=True)
+class Group:
+    """`aggregate` of `value` over the records of `source` with each value of `keys`, one row for each.
+
+    `m` describes the rows, with a column for each key, then one for the value, so they can be filtered and sorted.
+    """
+
+    source: Node
+    aggregate: Aggregate[Any]
+    value: Value | None
+    keys: tuple[Value, ...]
+    m: EntityMeta
+
+
+def group(source: Node, aggregate: Aggregate[Any], value: Value | None, keys: tuple[Value, ...]) -> Group:
+    # The rows of each group are of a class of their own, so only their columns can be used on them.
+    cls = type(f"groups of {record_meta(source).cls.__name__}", (), {})
+    columns = [FieldMeta(cls, GROUP_KEY.format(i), result_type(k), is_key=True) for i, k in enumerate(keys)]
+    value_type = aggregate.result or result_type(value)
+    columns.append(FieldMeta(cls, GROUP_VALUE, value_type, optional=True))
+    return Group(source, aggregate, value, keys, EntityMeta(cls, "", tuple(columns), ()))
+
+
+GROUP_KEY = "_inlay_key{}"
+GROUP_VALUE = "_inlay_value"
+
+
+def root_group(node: Node) -> Group:
+    """The `Group` under the filters, sorts and slices of `node`."""
+    while not isinstance(node, Group):
+        assert isinstance(node, Filter | Sort | Slice)
+        node = node.source
+    return node
+
+
+def group_value(node: Node) -> FieldMeta:
+    """The value column of the groups of `node`."""
+    return root_group(node).m.fields[-1]
+
+
+type Node = Table | Filter | Sort | Slice | Project | Group
 
 
 class Condition:
@@ -176,7 +213,7 @@ def _as_condition(value: object) -> Condition:
 
 def check_condition(cls: type, cond: Condition) -> None:
     """Raise if `cond` tests a field that is not a field of `cls`."""
-    for field in _fields(cond):
+    for field in condition_fields(cond):
         if field.owner is not cls:
             raise ValueError(f"{field.owner.__name__}.{field.name} cannot be used on {cls.__name__}")
 
@@ -188,6 +225,8 @@ def record_meta(query: Node) -> EntityMeta:
             return meta(cls)
         case Project(_, projection):
             return projection.m
+        case Group(m=m):
+            return m
         case Filter(source) | Sort(source) | Slice(source):
             return record_meta(source)
 
@@ -198,15 +237,18 @@ def classes_read(node: Node | Condition) -> set[type]:
         case Table(cls):
             return {cls}
         case Filter(source, cond):
-            return classes_read(source) | classes_read(cond)
+            # The fields `cond` tests are of the records of `source`, a projection or groups rather than a table.
+            return classes_read(source) | (classes_read(cond) - {record_meta(source).cls})
         case Sort(source, keys):
             return classes_read(source).union(*map(_classes_reached, keys))
         case Project(source, projection):
             return classes_read(source).union(*map(_classes_reached, projection.values))
         case Slice(source):
             return classes_read(source)
+        case Group(source, _, value, keys):
+            return classes_read(source).union(*map(_classes_reached, (value, *keys)))
         case Compare(left, _, right):
-            return {f.owner for f in _fields(node)} | _classes_reached(left) | _classes_reached(right)
+            return {f.owner for f in condition_fields(node)} | _classes_reached(left) | _classes_reached(right)
         case In(field, Filter() as records):
             return {field.owner} | classes_read(records)
         case And(items) | Or(items):
@@ -214,7 +256,7 @@ def classes_read(node: Node | Condition) -> set[type]:
         case Not(item):
             return classes_read(item)
         case _:
-            return {f.owner for f in _fields(node)}
+            return {f.owner for f in condition_fields(node)}
 
 
 def _classes_reached(value: object) -> set[type]:
@@ -222,8 +264,8 @@ def _classes_reached(value: object) -> set[type]:
     match value:
         case RefValue(refs):
             return {r.target for r in refs if r.target is not None}
-        case GroupValue(source, _, inner, keys, at):
-            return classes_read(source).union(*map(_classes_reached, (inner, *keys, *at)))
+        case GroupValue(groups, at):
+            return classes_read(groups).union(*map(_classes_reached, at))
         case Call(_, arg):
             return _classes_reached(arg)
         case BinOp(_, left, right):
@@ -249,8 +291,8 @@ def result_type(value: object) -> type:
             return float if op == "/" or float in types else int
         case RefValue(_, inner):
             return result_type(inner)
-        case GroupValue(_, aggregate, inner):
-            return aggregate.result or result_type(inner)
+        case GroupValue(groups):
+            return group_value(groups).py_type
         case _:
             return type(value)
 
@@ -291,7 +333,31 @@ def value_fields(value: object) -> Iterator[FieldMeta]:
                 yield from value_fields(v)
 
 
-def _fields(cond: Condition) -> Iterator[FieldMeta]:
+def replaced(node: Any, swaps: tuple[tuple[Value, Value], ...]) -> Any:
+    """`node`, a condition or a value, with each value equal to the first of a pair in `swaps` changed to the second."""
+    for old, new in swaps:
+        if node == old:
+            return new
+    match node:
+        case Compare(left, op, right):
+            return Compare(replaced(left, swaps), op, replaced(right, swaps))
+        case Match(field, kind, text):
+            return Match(replaced(field, swaps), kind, text)
+        case In(field, values):
+            return In(replaced(field, swaps), values)
+        case And(items) | Or(items):
+            return type(node)(tuple(replaced(item, swaps) for item in items))
+        case Not(item):
+            return Not(replaced(item, swaps))
+        case Call(fn, arg):
+            return Call(fn, replaced(arg, swaps))
+        case BinOp(op, left, right):
+            return BinOp(op, replaced(left, swaps), replaced(right, swaps))
+        case _:
+            return node
+
+
+def condition_fields(cond: Condition) -> Iterator[FieldMeta]:
     """The fields of the tested record that `cond` uses, not those of the records it reaches through `In`."""
     match cond:
         case Compare(left, _, right):
@@ -301,6 +367,6 @@ def _fields(cond: Condition) -> Iterator[FieldMeta]:
             yield field
         case And(items) | Or(items):
             for item in items:
-                yield from _fields(item)
+                yield from condition_fields(item)
         case Not(item):
-            yield from _fields(item)
+            yield from condition_fields(item)

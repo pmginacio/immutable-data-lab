@@ -10,12 +10,15 @@ from inlay.nodes import (
     CompareOp,
     Condition,
     Filter,
+    Group,
     In,
     Match,
     RefValue,
     Table,
     Value,
+    condition_fields,
     describe,
+    replaced,
     result_type,
     value_fields,
 )
@@ -141,6 +144,33 @@ def own_value(cls: type, value: object) -> Value:
         if field.owner is not cls:
             raise ValueError(f"{field.owner.__name__}.{field.name} is not a field of {cls.__name__}")
     return own
+
+
+def group_column(groups: Group, value: object) -> Value:
+    """`value` on the rows of `groups`: their value, or one of their keys written as when grouping, as `Order.customer`."""
+    relations, v = _parts(value)
+    own = replaced(RefValue(relations, v) if relations else v, _key_columns(groups))
+    _check_group_fields(groups, value_fields(own))
+    return own
+
+
+def group_condition(groups: Group, cond: Condition) -> Condition:
+    """`cond` on the rows of `groups`, testing their value, or their keys written as when grouping."""
+    on_rows = replaced(cond, _key_columns(groups))
+    _check_group_fields(groups, condition_fields(on_rows))
+    return on_rows
+
+
+def _key_columns(groups: Group) -> tuple[tuple[Value, Value], ...]:
+    return tuple(zip(groups.keys, groups.m.fields))
+
+
+def _check_group_fields(groups: Group, fields: Iterable[FieldMeta]) -> None:
+    for f in fields:
+        if f.owner is not groups.m.cls:
+            raise ValueError(
+                f"{describe(f)} is not a key of these groups; to keep only some records, filter them before aggregate_by"
+            )
 
 
 def record_values(values: tuple[object, ...]) -> tuple[tuple[FieldMeta, ...], tuple[Value, ...]] | None:
