@@ -127,7 +127,7 @@ def load_orders(db: Db, city: str | None = None, minimum: int | None = None) -> 
     return list(orders.sorted(key=Order.total, reverse=True)[:10])
 ```
 
-A view is an immutable description of a query, so adding a filter returns a new view.
+A query is an immutable description, so adding a filter returns a new query.
 Nothing is put together as text, and nothing runs until the last line.
 The function returns `Order` records, not tuples, and type checkers flag a misspelled field.
 
@@ -192,7 +192,7 @@ with inlay.open() as db:
     # Notice how you can also filter on referenced class attributes.
     lazy_big_lisbon_orders = orders.filter(Order.total > 100, Order.customer.city == "Lisbon")
 
-    # `lazy_big_lisbon_orders` is a lazy view: still no query has run, and it can be filtered further.
+    # `lazy_big_lisbon_orders` is a lazy query: nothing has run yet, and it can be filtered further.
     # Sorting and slicing are added to the same query.
     # The query runs here, in the loop, and the records arrive one at a time.
     for order in lazy_big_lisbon_orders.sorted(key=Order.total, reverse=True)[:10]:
@@ -290,10 +290,22 @@ avg([1, 2])                             # 1.5
 ```
 
 `aggregate_by` takes the built-ins `len`, `sum`, `min` and `max`, and inlay's `avg` for what Python lacks.
-With no values, in an empty view or a group whose values are all `None`, `sum` gives 0 and the others give `None`, or the `default` given to `min` and `max`.
+With no values, in an empty query or a group whose values are all `None`, `sum` gives 0 and the others give `None`, or the `default` given to `min` and `max`.
 Groups with no records are left out, as in a `Counter`, and a key can be a tuple of values, as in `sorted`.
 
-What `aggregate_by` gives runs its query again on every read, as a view does; `dict(...)` keeps one reading.
+What `aggregate_by` gives is a query of groups: a mapping that runs again on every read, as a query does.
+`dict(totals.items())` keeps one reading, read in one query.
+Groups are filtered, sorted and sliced like records, by `value` and by their keys written as they were grouped by:
+
+```python
+totals = db[Order].aggregate_by(Order.customer, sum, Order.total)
+top_five = totals.sorted(key=totals.value, reverse=True)[:5]
+dict(top_five.items())                           # {"bob": 4200, "ana": 3100, ...}, biggest first
+totals.filter(totals.value > 1000, Order.customer != ana.id)
+```
+
+A condition on a field that is not a key, such as `Order.total`, is refused: it belongs before `aggregate_by`, on the records.
+
 Looked up with a field instead of a key, it gives each record the value of its own group, for use in queries:
 
 ```python
@@ -305,7 +317,26 @@ big_customers = db[Customer].filter(totals[Customer.id] > 1000)
 ```
 
 It all runs in one query, and nothing is read into Python.
-A key with no records gives `None`, as an empty optional `Ref` does, so a customer with no orders is not among `big_customers`.
+A key with no group gives `None`, as an empty optional `Ref` does, so a customer with no orders is not among `big_customers`.
+Groups that are filtered or sliced leave out the keys they drop, so `top_five[Customer.id]` is `None` for the others.
+
+### Queries without a db
+
+`db[Order]` and what is built from it run on that db, but a query needs no db to be built.
+`query(Order)` starts one, and `db[q]` runs it, so a query or a group can be defined once, at the top of a module:
+
+```python
+from inlay import query
+
+big_orders = query(Order).filter(Order.total > 100).sorted(key=Order.total)
+biggest = query(Order).aggregate_by(Order.customer, max, Order.total)
+
+for order in db[big_orders]: ...
+dict(db[biggest].items())
+```
+
+Reading a query that has no db, by looping over it, `len` or `in`, raises `TypeError`.
+Built into another query, as a group value or in `one_of`, a query adds its conditions only, and the db that runs is the outer one.
 
 ### Your own functions
 
@@ -352,8 +383,22 @@ rows.aggregate_by(OrderRow.city, sum, OrderRow.with_tax)
 A projection has one root, `Order` here, and one row for each of its records, so it must take the root's key.
 Each field is typed as its value, with `| None` when the value comes through an optional `Ref`, and `@projection` raises when they differ.
 Conditions on the root come before `project`, and filters, sorting, slices and aggregates on the projection's fields after it, all in one query.
-`project` takes a view that is only filtered, since a subquery keeps no order.
+`project` takes a query that is only filtered, since a subquery keeps no order.
 A projection has no table, so it is not registered and `db[OrderRow]` raises.
+
+A field can be the value of a group, defined without a db as above, such as the biggest order of each order's customer:
+
+```python
+biggest = query(Order).aggregate_by(Order.customer, max, Order.total)
+
+@projection(Order)
+class OrderWithBiggest:
+    id: str
+    total: int
+    customers_biggest: int | None = biggest[Order.customer]
+```
+
+Its value is `None` for a key with no group, so the field is optional.
 
 A small shop app that uses all of this, with comments that point at each feature, is in [`examples/shop.py`](examples/shop.py).
 
@@ -482,7 +527,7 @@ Nothing changes behind the back of the code that holds a record.
 **The db is a set of records per class.**
 The method names come from Python's own types: `add`, `update`, `remove`, `discard`, `clear`, `in`, `len`, `sorted`, slicing, `sum`, `min` and `max`.
 Reads return whole records, never single fields.
-Database calls are always visible: only `db`, and the sets and views it hands out, touch the database.
+Database calls are always visible: only `db`, and the sets and queries it hands out, touch the database.
 
 **Relations are keys.**
 `customer: Ref[Customer]` is stored as the customer's key.
@@ -505,11 +550,12 @@ Relations become subqueries, so there are no joins to write and no duplicate row
 Combine conditions with `&`, `|`, `all_of`, `any_of`, `negate` and `none_of`.
 Python's `and`, `or`, `not` and `1 < x < 5` would silently drop part of a condition, so a condition refuses to be a boolean and names the right tool.
 
-**Views are lazy and immutable.**
-`filter`, `sorted` and slicing return a new view, and no SQL runs until it is read.
-Every read runs the query again, so it sees current data, and `tuple(view)` gives a snapshot.
+**Queries are lazy and immutable.**
+`filter`, `sorted`, slicing, `project` and `aggregate_by` return a new query, and no SQL runs until it is read.
+A query is a tree of plain data; the db it may hold is only where it runs, and `db[q]` gives it another.
+Every read runs the query again, so it sees current data, and `tuple(q)` gives a snapshot.
 `len`, `sum`, `min`, `max` and `aggregate_by` run inside the db and load no records.
-A slice is a view too, so `view[:10].filter(...)` filters those ten records.
+A slice is a query too, so `q[:10].filter(...)` filters those ten records.
 Changing a table while looping over it is refused, because SQLite does not say what such a loop returns.
 
 **Nothing is implicit.**
@@ -536,7 +582,7 @@ Only the `db` modules, `inlay.db`, `inlay.history.db` and `inlay.datoms.db`, tal
 | `functions` | functions such as `to_month` and aggregates such as `avg`, each with its Python and SQL |
 | `types` | Python types to SQLite types, and back |
 | `sql` | pure functions that build one SQL statement or clause each |
-| `db` | `open`, the db with `register`, `migrate` and `rename`, record sets and views, and transactions |
+| `db` | `open`, the db with `register`, `migrate` and `rename`, record sets, queries and groups, and transactions |
 
 ## What it does not do
 
