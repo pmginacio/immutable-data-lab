@@ -17,7 +17,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import inlay
-from inlay import AlreadyExists, Db, Function, RecordView, Ref, entity, key, one_of, to_month
+from inlay import AlreadyExists, Db, Function, RecordView, Ref, entity, key, one_of, projection, to_month
 
 # ---------------------------------------------------------------------------
 # 1. The data
@@ -231,6 +231,25 @@ def revenue_from_referrals(db: Db, customer_id: str) -> int:
     return paid_orders(db).filter(Order.customer.referred_by == customer_id).sum(Order.total)
 
 
+# inlay: a projection is the shape of a result, such as the rows an API returns: fields of the order and values
+# of its customer, read in one query. It has no table, and a view turns into it with `project`.
+@projection(Order)
+class OrderRow:
+    id: str
+    placed: datetime
+    total: int
+    customer_name: str = Order.customer.name
+    city: str = Order.customer.city
+
+
+def latest_paid(db: Db, city: str | None = None) -> RecordView[OrderRow]:
+    # inlay: conditions on the order come before `project`, and the fields of the projection work after it.
+    rows = paid_orders(db).project(OrderRow)
+    if city is not None:
+        rows = rows.filter(OrderRow.city == city)
+    return rows.sorted(key=OrderRow.placed, reverse=True)[:3]
+
+
 def stock_value(db: Db) -> int:
     # inlay: arithmetic on fields is computed by the db.
     return db[Product].sum(Product.price * Product.stock)
@@ -312,6 +331,10 @@ def main() -> None:
             for order in latest_orders(db, ana.id, size=3):
                 paid = "not paid" if order.paid is None else f"paid {order.paid:%H:%M}"
                 print(f"  {order.placed:%d %b %H:%M}  {order.status:<9} {money(order.total):>8}  {paid}")
+
+            print("\nLatest paid orders in Porto")
+            for row in latest_paid(db, city="Porto"):
+                print(f"  {row.placed:%d %b}  {row.customer_name:<4} {money(row.total):>8}")
 
             print(f"\nStock worth {money(stock_value(db))}")
             print("\nLow stock")

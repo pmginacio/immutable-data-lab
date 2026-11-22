@@ -292,6 +292,33 @@ The two versions must give the same answers, and nothing checks that they do.
 The SQL sees values as inlay stores them: dates as ISO 8601 text, and aware datetimes in UTC.
 A function takes one argument for now.
 
+### Projections
+
+A projection is the shape of a result that is not a stored record, such as the rows an API returns: some fields of a record, and values from the records it refers to.
+With the `Customer` and `Order` of the first example:
+
+```python
+from inlay import projection
+
+@projection(Order)
+class OrderRow:
+    id: str                              # named as a field of Order, so it takes it
+    total: int
+    name: str = Order.customer.name      # any other field is given its value
+    city: str = Order.customer.city
+    with_tax: float = Order.total * 1.25
+
+rows = db[Order].filter(Order.total > 100).project(OrderRow)
+rows.filter(OrderRow.city == "Lisbon").sorted(key=OrderRow.name)[:50]
+rows.aggregate_by(OrderRow.city, sum, OrderRow.with_tax)
+```
+
+A projection has one root, `Order` here, and one row for each of its records, so it must take the root's key.
+Each field is typed as its value, with `| None` when the value comes through an optional `Ref`, and `@projection` raises when they differ.
+Conditions on the root come before `project`, and filters, sorting, slices and aggregates on the projection's fields after it, all in one query.
+`project` takes a view that is only filtered, since a subquery keeps no order.
+A projection has no table, so it is not registered and `db[OrderRow]` raises.
+
 A small shop app that uses all of this, with comments that point at each feature, is in [`examples/shop.py`](examples/shop.py).
 
 ### Changing a class
@@ -467,7 +494,7 @@ Only the `db` modules, `inlay.db`, `inlay.history.db` and `inlay.datoms.db`, tal
 | Module | Job |
 |---|---|
 | `meta` | the metadata about each class and its fields |
-| `entity` | the `@entity` decorator, `key` and `Ref` |
+| `entity` | the `@entity` and `@projection` decorators, `key` and `Ref` |
 | `nodes` | the condition and query trees, as plain data |
 | `conditions` | field references, the builder that turns `Order.total > 100` into the tree |
 | `functions` | functions such as `to_month` and aggregates such as `avg`, each with its Python and SQL |

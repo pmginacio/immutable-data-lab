@@ -1,7 +1,7 @@
 # Projections
 
 A design for reading the shape of a result, such as the rows an API endpoint returns, without writing its SQL.
-Nothing is built yet.
+The first version is built, as described under "Design" and "Compiling", with the differences in "As built".
 
 ## The problem
 
@@ -91,3 +91,14 @@ That comes when filters on related fields turn out slow.
 - Optional fields, done on 2026-11-21, so a path through a `Ref` can be empty.
 - Reverse relations, for projections rooted on the side with one record.
 - Conditions on groups, several aggregates in one query, and the first N groups by their aggregate, for grouped endpoints.
+
+## As built
+
+Built on 2026-11-22.
+
+- `@projection` lives in `entity.py`, next to `@entity`, since it shares the field descriptor and the parsing of `X | None`.
+  A projection's metadata is an `EntityMeta` with no table, stored apart from an entity's, so `meta`, `db[...]` and `register` refuse it.
+- `project` takes a view that is only filtered: a subquery keeps no order in SQL, so a sort or a slice of the root before it would be lost.
+  Sorting and slicing go after it, by the projection's fields.
+- The paused history experiments do not read projections, so the snapshot case above is not built.
+
