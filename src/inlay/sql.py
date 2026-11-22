@@ -57,19 +57,19 @@ def create_table_sql(m: EntityMeta, table: str | None = None) -> str:
     return f"CREATE TABLE {quote(table)} ({', '.join(_column_def(f, table) for f in m.fields)}) STRICT"
 
 
-def create_index_sql(m: EntityMeta, index: tuple[FieldMeta, ...]) -> str:
-    columns = ", ".join(map(_column, index))
-    return f"CREATE INDEX IF NOT EXISTS {quote(index_name(m, index))} ON {quote(m.table)} ({columns})"
-
-
-def index_name(m: EntityMeta, index: tuple[FieldMeta, ...]) -> str:
-    """The table's name and the fields', so every index inlay makes for a table starts with the table's name and `__`."""
-    return "__".join((m.table, *(f.name for f in index)))
+def index_prefix(table: str) -> str:
+    """How the name of every index inlay makes for `table` starts, so the ones made by hand can be told apart."""
+    return f"{table}__"
 
 
 def indexes_sql(m: EntityMeta) -> dict[str, str]:
-    """The CREATE INDEX statement of every index `m` declares, by name."""
-    return {index_name(m, index): create_index_sql(m, index) for index in m.indexes}
+    """The CREATE INDEX statement of every index `m` declares, by name: the prefix and the names of its fields."""
+    statements: dict[str, str] = {}
+    for index in m.indexes:
+        name = index_prefix(m.table) + "__".join(f.name for f in index)
+        columns = ", ".join(map(_column, index))
+        statements[name] = f"CREATE INDEX IF NOT EXISTS {quote(name)} ON {quote(m.table)} ({columns})"
+    return statements
 
 
 def drop_index_sql(name: str) -> str:
@@ -89,7 +89,7 @@ def reprefix_index_sql(name: str, sql: str, old_table: str, new_table: str) -> t
 
     `sql` is the stored text, which already says `ON` the new table.
     """
-    new_name = new_table + name.removeprefix(old_table)
+    new_name = index_prefix(new_table) + name.removeprefix(index_prefix(old_table))
     return f"DROP INDEX {quote(name)}", sql.replace(quote(name), quote(new_name), 1)
 
 

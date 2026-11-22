@@ -47,6 +47,7 @@ from inlay.sql import (
     delete_equal_sql,
     drop_index_sql,
     drop_table_sql,
+    index_prefix,
     indexes_sql,
     insert_sql,
     rename_table_sql,
@@ -487,7 +488,7 @@ def rename(old: str, new: str, *, path: str | os.PathLike[str] = DEFAULT_PATH) -
             raise SchemaMismatch(f"table {new_table!r} already exists")
         conn.execute(rename_table_sql(old_table, new_table))
         for name, sql in conn.execute(LIST_INDEXES, (new_table,)).fetchall():
-            if name.startswith(f"{old_table}__"):
+            if name.startswith(index_prefix(old_table)):
                 _execute(conn, reprefix_index_sql(name, sql, old_table, new_table))
         conn.execute(COMMIT)
     finally:
@@ -514,7 +515,7 @@ def _sync_indexes(conn: sqlite3.Connection, m: EntityMeta) -> None:
     Only indexes named as inlay names them, after the table, are dropped, so ones made by hand stay.
     """
     declared = indexes_sql(m)
-    stored = [name for name, _ in conn.execute(LIST_INDEXES, (m.table,)) if name.startswith(f"{m.table}__")]
+    stored = [name for name, _ in conn.execute(LIST_INDEXES, (m.table,)) if name.startswith(index_prefix(m.table))]
     drops = [drop_index_sql(name) for name in stored if name not in declared]
     creates = [sql for name, sql in declared.items() if name not in stored]
     _execute(conn, (*drops, *creates))
