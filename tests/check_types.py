@@ -83,6 +83,7 @@ def _tables(db: Db) -> None:
     by_customer = big.aggregate_by(Order.customer, len)
     assert_type(by_customer, Grouped[str, int])
     assert_type(by_customer[Customer.id], int)
+    assert_type(by_customer[Order.customer], int)
 
 
 @projection(Order)

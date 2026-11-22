@@ -260,6 +260,8 @@ class Grouped[K, V](Mapping[K, V]):
     def __getitem__(self, key: slice) -> "Grouped[K, V]": ...
     @overload
     def __getitem__(self, key: K) -> V: ...
+    @overload
+    def __getitem__(self, key: type) -> V: ...  # a `Ref` field, typed as its class on the class, as in `totals[Order.customer]`
     def __getitem__(self, key: Any) -> Any:
         if isinstance(key, slice):
             return replace(self, _node=Slice(self._node, *_slice_bounds(key)))
