@@ -7,7 +7,7 @@ from helpers import opened
 import inlay
 import inlay.datoms
 import inlay.history
-from inlay import Ref, avg, entity, key, to_month
+from inlay import Ref, avg, entity, key, query, to_month
 
 
 @entity(indexes=[("city",)])
@@ -234,3 +234,28 @@ def test_only_the_record_set_can_delete(db):
     view = db[Order].filter(Order.total > 100)
     assert not hasattr(view, "delete")
     assert not hasattr(view, "clear")
+
+
+def test_a_query_built_without_a_db_runs_on_the_db_it_is_bound_to(tmp_path):
+    big = query(Order).filter(Order.total > 100).sorted(key=Order.total)
+    with opened(inlay.open, [Customer, Order], tmp_path / "a.db", [ANA, BOB, CID, *ORDERS]) as a:
+        with opened(inlay.open, [Customer, Order], tmp_path / "b.db", [ANA, ORDERS[0]]) as b:
+            assert (ids(a[big]), ids(b[big])) == (["o4", "o1", "o3"], ["o1"])
+
+
+@pytest.mark.parametrize("read", [
+    lambda: len(query(Order)),
+    lambda: list(query(Order)),
+    lambda: ORDERS[0] in query(Order),
+    lambda: dict(query(Order).aggregate_by(Order.customer, len)),
+])
+def test_a_query_without_a_db_cannot_run(read):
+    with pytest.raises(TypeError, match="run it as db"):
+        read()
+
+
+def test_a_group_built_without_a_db_runs_on_the_db_and_inside_its_queries(tmp_path):
+    biggest = query(Order).aggregate_by(Order.customer, max, Order.total)
+    with opened(inlay.open, [Customer, Order], tmp_path / "shop.db", [ANA, BOB, CID, *ORDERS]) as db:
+        assert dict(db[biggest]) == {"ana": 150, "bob": 200, "cid": 120}
+        assert ids(db[Order].filter(Order.total == biggest[Order.customer]).sorted(key=Order.id)) == ["o1", "o3", "o4"]

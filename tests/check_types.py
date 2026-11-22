@@ -9,8 +9,8 @@ from typing import Any, assert_type
 from inlay import (
     Db,
     Grouped,
+    Query,
     RecordSet,
-    RecordView,
     Ref,
     all_of,
     any_of,
@@ -18,6 +18,7 @@ from inlay import (
     contains,
     entity,
     key,
+    query,
     negate,
     none_of,
     one_of,
@@ -56,7 +57,7 @@ def _tables(db: Db) -> None:
     assert_type(db[Customer], RecordSet[Customer])
     assert_type(db[Customer].get("c1"), Customer | None)
     view = db[Order].filter(Order.total > 100).sorted(key=Order.total)[:10]
-    assert_type(view, RecordView[Order])
+    assert_type(view, Query[Order])
     assert_type(view.get("o1"), Order | None)
     assert_type(len(view), int)
     assert_type(view.sum(Order.total), int)
@@ -72,9 +73,13 @@ def _tables(db: Db) -> None:
     for order in view:
         assert_type(order, Order)
     rows = db[Order].project(OrderRow).filter(OrderRow.city == "Lisbon")
-    assert_type(rows, RecordView[OrderRow])
+    assert_type(rows, Query[OrderRow])
     for row in rows:
         assert_type(row.city, str)
+    big = query(Order).filter(Order.total > 100)
+    assert_type(big, Query[Order])
+    assert_type(db[big], Query[Order])
+    assert_type(db[big.aggregate_by(Order.total, len)], Grouped[int, int])
 
 
 @projection(Order)

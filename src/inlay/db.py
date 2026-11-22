@@ -3,7 +3,7 @@ import sqlite3
 from collections import Counter, defaultdict
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, replace
 from types import TracebackType
 from typing import Any, Self, overload
 
@@ -81,27 +81,32 @@ class BrokenRef(StoreError):
 
 
 @dataclass(frozen=True, eq=False)
-class RecordView[T]:
-    """A lazy, read-only collection of records. Every read runs its query again."""
+class Query[T]:
+    """Records of one class to read, described by `filter`, `sorted`, slicing and `project`, which give a new query.
 
-    _conn: sqlite3.Connection
-    _open_iterations: Counter[type]
-    _query: Node
+    A query bound to a db runs when it is read: iterated, counted, or asked whether it holds a record.
+    `db[Order]` is bound, and so is every query built from it; `db[q]` binds any query, such as one from `query(Order)`.
+    Every read runs it again.
+    """
+
+    _node: Node
+    _db: Db | None = None
 
     @property
     def _meta(self) -> EntityMeta:
-        return record_meta(self._query)
+        return record_meta(self._node)
 
     def __iter__(self) -> Iterator[T]:
-        sql, params = select_sql(self._query)
-        classes = classes_read(self._query)
+        db = _bound(self._db)
+        sql, params = select_sql(self._node)
+        classes = classes_read(self._node)
         # SQLite does not say what an open SELECT returns once its tables change, so writes to them are refused.
-        self._open_iterations.update(classes)
+        db._open_iterations.update(classes)
         try:
-            for row in self._conn.execute(sql, params):
+            for row in db._conn.execute(sql, params):
                 yield _from_row(self._meta, row)
         finally:
-            self._open_iterations.subtract(classes)
+            db._open_iterations.subtract(classes)
 
     def __len__(self) -> int:
         return self._aggregate(aggregate_of(len))
@@ -112,43 +117,43 @@ class RecordView[T]:
         equal = (Compare(f, "==", getattr(record, f.name)) for f in self._meta.fields)
         return len(self.filter(*equal)) > 0
 
-    def __getitem__(self, s: slice) -> "RecordView[T]":
+    def __getitem__(self, s: slice) -> "Query[T]":
         if not isinstance(s, slice):
-            raise TypeError("a view can only be sliced, as in view[:10]")
+            raise TypeError("a query can only be sliced, as in q[:10]")
         start, stop = s.start or 0, s.stop
         if s.step is not None or start < 0 or (stop is not None and stop < 0):
             raise ValueError("a slice takes a start and a stop, and no negative numbers")
-        return self._view(Slice(self._query, start, stop))
+        return Query(Slice(self._node, start, stop), self._db)
 
-    def filter(self, *conds: Condition | bool) -> "RecordView[T]":
+    def filter(self, *conds: Condition | bool) -> "Query[T]":
         cond = all_of(*conds)
         check_condition(self._meta.cls, cond)
-        return self._view(Filter(self._query, cond))
+        return Query(Filter(self._node, cond), self._db)
 
-    def sorted(self, *, key: Any, reverse: bool = False) -> "RecordView[T]":
+    def sorted(self, *, key: Any, reverse: bool = False) -> "Query[T]":
         """`key` is a value such as `Order.total`, `Order.total * 2` or `Order.customer.name`, or a tuple of values.
 
         A value read through an empty `Ref` is None, which sorts first.
         """
         keys = key if isinstance(key, tuple) else (key,)
-        return self._view(Sort(self._query, tuple(own_value(self._meta.cls, k) for k in keys), reverse))
+        return Query(Sort(self._node, tuple(own_value(self._meta.cls, k) for k in keys), reverse), self._db)
 
     def get(self, key: str) -> T | None:
         return next(iter(self.filter(Compare(self._meta.key, "==", key))), None)
 
-    def project[P](self, cls: type[P]) -> "RecordView[P]":
+    def project[P](self, cls: type[P]) -> "Query[P]":
         """These records in the shape of the projection `cls`, whose fields filters and sorting use after it."""
         projection = projection_of(cls)
         if projection.root is not self._meta.cls:
             root, here = projection.root.__name__, self._meta.cls.__name__
             raise TypeError(f"{cls.__name__} is a projection of {root}, not of {here}")
-        source = self._query
+        source = self._node
         while isinstance(source, Filter):
             source = source.source
         if not isinstance(source, Table):
             # A subquery keeps no order in SQL, so an order or a slice of the root would be lost.
             raise ValueError("project comes after filters only; sort and slice after it, by its fields")
-        return RecordView(self._conn, self._open_iterations, Project(self._query, projection))
+        return Query(Project(self._node, projection), self._db)
 
     @overload
     def sum(self, value: int) -> int: ...
@@ -184,10 +189,10 @@ class RecordView[T]:
         many = isinstance(key, tuple)
         keys = tuple(own_value(self._meta.cls, k) for k in (key if many else (key,)))
         own = None if value is None else self._aggregated(aggregate, value)
-        return Grouped(self._conn, self._query, aggregate, own, keys, many)
+        return Grouped(self._node, aggregate, own, keys, many, self._db)
 
     def _aggregated(self, aggregate: Aggregate[Any], value: object) -> Value:
-        """`value` as a value of the records of this view that `aggregate` can take."""
+        """`value` as a value of the records of this query that `aggregate` can take."""
         own = own_value(self._meta.cls, value)
         if aggregate.arg is None:
             raise TypeError(f"{aggregate.name} takes no value")
@@ -201,12 +206,20 @@ class RecordView[T]:
         result = self._aggregate(aggregate, own)
         return default if result is None else from_sql(result, result_type(own))
 
-    def _view(self, query: Node) -> "RecordView[T]":
-        return RecordView(self._conn, self._open_iterations, query)
-
     def _aggregate(self, aggregate: Aggregate[Any], value: Value | None = None) -> Any:
-        sql, params = aggregate_sql(self._query, aggregate, value)
-        return self._conn.execute(sql, params).fetchone()[0]
+        sql, params = aggregate_sql(self._node, aggregate, value)
+        return _bound(self._db)._conn.execute(sql, params).fetchone()[0]
+
+
+def query[T](cls: type[T]) -> Query[T]:
+    """All the records of the entity `cls`, as a query not bound to a db: `db[q]` runs it."""
+    return Query(Table(meta(cls).cls))
+
+
+def _bound(db: Db | None) -> Db:
+    if db is None:
+        raise TypeError("this query has no db; run it as db[q]")
+    return db
 
 
 @dataclass(frozen=True, eq=False, repr=False)
@@ -218,12 +231,12 @@ class Grouped[K, V](Mapping[K, V]):
     the value is None for a key with no records.
     """
 
-    _conn: sqlite3.Connection
     _query: Node
     _aggregate: Aggregate[Any]
     _value: Value | None
     _keys: tuple[Value, ...]
     _many: bool  # keys are tuples, as `aggregate_by` was given a tuple of values
+    _db: Db | None = None
 
     def __getitem__(self, key: K) -> V:
         if (found := record_values(key if self._many and isinstance(key, tuple) else (key,))) is None:
@@ -250,21 +263,23 @@ class Grouped[K, V](Mapping[K, V]):
         value_type = self._aggregate.result or result_type(self._value)
         groups = {
             tuple(map(from_sql, row[:-1], key_types)): from_sql(row[-1], value_type)
-            for row in self._conn.execute(sql, params)
+            for row in _bound(self._db)._conn.execute(sql, params)
         }
         return groups if self._many else {k: v for (k,), v in groups.items()}
 
 
 @dataclass(frozen=True, eq=False)
-class RecordSet[T](RecordView[T]):
-    """All the records of one class. Unlike a view, it can also delete."""
+class RecordSet[T](Query[T]):
+    """All the records of one class, in a db. Unlike other queries, it can also delete.
 
-    _transaction: Callable[[], AbstractContextManager[None]] = field(kw_only=True)  # the db's
+    What `filter`, `sorted` and the others give is a plain `Query`, so it cannot delete.
+    """
 
     def delete(self, *keys: str) -> None:
-        _raise_if_iterating(self._open_iterations, [self._meta.cls])
-        with self._transaction():
-            deleted = self._conn.executemany(delete_by_key_sql(self._meta), ((k,) for k in keys)).rowcount
+        db = _bound(self._db)
+        _raise_if_iterating(db._open_iterations, [self._meta.cls])
+        with db.transaction():
+            deleted = db._conn.executemany(delete_by_key_sql(self._meta), ((k,) for k in keys)).rowcount
             if deleted != len(keys):
                 raise Missing(f"{len(keys) - deleted} of the {self._meta.cls.__name__} keys are not stored")
 
@@ -272,9 +287,10 @@ class RecordSet[T](RecordView[T]):
         cond = all_of(*conds)
         check_condition(self._meta.cls, cond)
         sql, params = clear_sql(self._meta, cond)
-        _raise_if_iterating(self._open_iterations, [self._meta.cls])
-        with self._transaction():
-            self._conn.execute(sql, params)
+        db = _bound(self._db)
+        _raise_if_iterating(db._open_iterations, [self._meta.cls])
+        with db.transaction():
+            db._conn.execute(sql, params)
 
 
 class Db:
@@ -285,10 +301,28 @@ class Db:
         # since it may have undone a `register` or a `del`, and the next use of each class looks again.
         self._known: set[type] = set()
 
-    def __getitem__[T](self, cls: type[T]) -> RecordSet[T]:
-        """The records of `cls`. Raises `KeyError` if it has no table, and `SchemaMismatch` if its table differs."""
-        self._require_tables(cls)
-        return RecordSet(self._conn, self._open_iterations, Table(cls), _transaction=self.transaction)
+    @overload
+    def __getitem__[T](self, x: type[T]) -> RecordSet[T]: ...
+    @overload
+    def __getitem__[T](self, x: Query[T]) -> Query[T]: ...
+    @overload
+    def __getitem__[K, V](self, x: Grouped[K, V]) -> Grouped[K, V]: ...
+    def __getitem__(self, x: Any) -> Any:
+        """The records of the class `x`, or the query or group `x` bound to this db.
+
+        Raises `KeyError` if a class read has no table, and `SchemaMismatch` if its table differs.
+        """
+        match x:
+            case type():
+                self._require_tables(x)
+                return RecordSet(Table(x), self)
+            case Query():
+                self._require_tables(*classes_read(x._node))
+                return Query(x._node, self)
+            case Grouped():
+                self._require_tables(*classes_read(x._query))
+                return replace(x, _db=self)
+        raise TypeError(f"db[...] takes a class, a query or a group, not {x!r}")
 
     def __contains__(self, cls: type) -> bool:
         """Whether `cls` has a table, even one that differs from it."""

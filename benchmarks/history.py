@@ -121,7 +121,7 @@ def write_all(db: AnyDb, w: Workload) -> dict[str, float]:
 
 
 type Orders = Callable[
-    [], inlay.RecordView[Order] | inlay.history.RecordView[Order] | inlay.datoms.RecordView[Order]
+    [], inlay.Query[Order] | inlay.history.RecordView[Order] | inlay.datoms.RecordView[Order]
 ]
 
 

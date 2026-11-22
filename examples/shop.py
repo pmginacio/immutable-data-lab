@@ -17,7 +17,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import inlay
-from inlay import AlreadyExists, Db, Function, RecordView, Ref, entity, key, one_of, projection, to_month
+from inlay import AlreadyExists, Db, Function, Query, Ref, entity, key, one_of, projection, to_month
 
 # ---------------------------------------------------------------------------
 # 1. The data
@@ -177,27 +177,27 @@ def get_order(db: Db, order_id: str) -> Order:
 # ---------------------------------------------------------------------------
 
 
-def paid_orders(db: Db) -> RecordView[Order]:
+def paid_orders(db: Db) -> Query[Order]:
     return db[Order].filter(Order.status == PAID)
 
 
-def orders_in_city(orders: RecordView[Order], city: str) -> RecordView[Order]:
+def orders_in_city(orders: Query[Order], city: str) -> Query[Order]:
     # inlay: a field of a related record is reached with a dot. This is a subquery, so there is no join to write
     # and no order is returned twice.
     return orders.filter(Order.customer.city == city)
 
 
-def latest_orders(db: Db, customer_id: str, page: int = 0, size: int = 5) -> RecordView[Order]:
+def latest_orders(db: Db, customer_id: str, page: int = 0, size: int = 5) -> Query[Order]:
     # `sorted` and slicing work like the built-ins, and the sorting and the slicing both happen in the db.
     newest_first = db[Order].filter(Order.customer == customer_id).sorted(key=Order.placed, reverse=True)
     return newest_first[page * size : (page + 1) * size]
 
 
-def low_stock(db: Db, at_most: int) -> RecordView[Product]:
+def low_stock(db: Db, at_most: int) -> Query[Product]:
     return db[Product].filter(Product.stock <= at_most).sorted(key=Product.stock)
 
 
-def waiting_too_long(db: Db, now: datetime) -> RecordView[Order]:
+def waiting_too_long(db: Db, now: datetime) -> Query[Order]:
     # inlay: several conditions in one `filter` are combined with "and". Dates work like any other field.
     return db[Order].filter(Order.status == NEW, Order.placed < now - timedelta(days=7))
 
@@ -242,7 +242,7 @@ class OrderRow:
     city: str = Order.customer.city
 
 
-def latest_paid(db: Db, city: str | None = None) -> RecordView[OrderRow]:
+def latest_paid(db: Db, city: str | None = None) -> Query[OrderRow]:
     # inlay: conditions on the order come before `project`, and the fields of the projection work after it.
     rows = paid_orders(db).project(OrderRow)
     if city is not None:

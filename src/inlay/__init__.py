@@ -5,11 +5,12 @@ from inlay.db import (
     Db,
     Grouped,
     Missing,
+    Query,
     RecordSet,
-    RecordView,
     SchemaMismatch,
     StoreError,
     open,
+    query,
 )
 from inlay.entity import Ref, entity, hashed, key, projection
 from inlay.functions import Aggregate, Function, avg, to_day, to_month
@@ -24,8 +25,8 @@ __all__ = [
     "Function",
     "Grouped",
     "Missing",
+    "Query",
     "RecordSet",
-    "RecordView",
     "Ref",
     "SchemaMismatch",
     "StoreError",
@@ -42,6 +43,7 @@ __all__ = [
     "one_of",
     "open",
     "projection",
+    "query",
     "to_day",
     "to_month",
 ]
