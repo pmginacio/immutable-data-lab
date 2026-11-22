@@ -81,10 +81,7 @@ def projection[C](root: type) -> Callable[[type[C]], type[C]]:
     root_meta = meta(root)
 
     def wrap(cls: type) -> type:
-        # The values are taken out first, so that dataclass does not make them defaults.
-        values = {name: v for name, v in vars(cls).items() if isinstance(v, Expr)}
-        for name in values:
-            delattr(cls, name)
+        values = _take_values(cls)
         new = dataclass(frozen=True, slots=True, kw_only=True)(cls)
         p = _projection(new, root_meta, values)
         return _with_fields(new, "__inlay_projection__", p, p.m)
@@ -97,6 +94,17 @@ def projection_of(cls: type) -> Projection:
     if not isinstance(p, Projection):
         raise TypeError(f"{cls.__name__} is not a @projection class")
     return p
+
+
+def _take_values(cls: type) -> dict[str, Expr]:
+    """Removes the values written in the class, such as `city: str = Order.customer.city`, and returns them by field.
+
+    `dataclass` would take them as defaults. Type checkers still do, so they accept a row built without them.
+    """
+    values = {name: v for name, v in vars(cls).items() if isinstance(v, Expr)}
+    for name in values:
+        delattr(cls, name)
+    return values
 
 
 def _with_fields(cls: type, attribute: str, description: object, m: EntityMeta) -> type:
