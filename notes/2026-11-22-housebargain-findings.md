@@ -32,6 +32,9 @@ The projection that gives them, `Current`, repeats each of those values as its o
 A field typed as an entity class, such as `state: AdState = Ad.state` and `location: Location = Ad.state.location`, could read all the columns of the referenced record in the same query and build it.
 The passes would read `row.state.price`, the shape of the stored data, and type checkers would know every field without more code.
 
+Decided against: a projection is a choice of the values a use needs, and a whole record in a field would bring every value of its class whether needed or not, like `SELECT t.*` in a SQL view.
+A long projection is better answered by smaller projections for each use.
+
 ### A key that is also a `Ref`
 
 `Annotation` holds the user's marks on an `Ad`, keyed by the ad's key, so that the dedup pass, which rewrites ads, never touches them.
