@@ -253,7 +253,7 @@ big = invoices.filter(Invoice.total * 0.9 > 100)
 by_month = invoices.sorted(key=(to_month(Invoice.at), Invoice.total))
 latest_month = invoices.max(to_month(Invoice.at))  # a date
 
-# One number per group, as a dict in key order: {date(2026, 1, 1): 1520.0, date(2026, 2, 1): 1483.0, ...}
+# One number per group, as a mapping in key order: {date(2026, 1, 1): 1520.0, date(2026, 2, 1): 1483.0, ...}
 revenue_in_euros = invoices.aggregate_by(to_month(Invoice.at), sum, Invoice.total / 100)
 invoices_per_day = invoices.aggregate_by(to_day(Invoice.at), len)
 # Keyed by the customer's key, for the orders of the example above.
@@ -270,6 +270,20 @@ avg([1, 2])                             # 1.5
 `aggregate_by` takes the built-ins `len`, `sum`, `min` and `max`, and inlay's `avg` for what Python lacks.
 With no values, in an empty view or a group whose values are all `None`, `sum` gives 0 and the others give `None`, or the `default` given to `min` and `max`.
 Groups with no records are left out, as in a `Counter`, and a key can be a tuple of values, as in `sorted`.
+
+What `aggregate_by` gives runs its query again on every read, as a view does; `dict(...)` keeps one reading.
+Looked up with a field instead of a key, it gives each record the value of its own group, for use in queries:
+
+```python
+biggest = db[Order].aggregate_by(Order.customer, max, Order.total)
+biggest_orders = db[Order].filter(Order.total == biggest[Order.customer])  # each customer's biggest order
+
+totals = db[Order].aggregate_by(Order.customer, sum, Order.total)
+big_customers = db[Customer].filter(totals[Customer.id] > 1000)
+```
+
+It all runs in one query, and nothing is read into Python.
+A key with no records gives `None`, as an empty optional `Ref` does, so a customer with no orders is not among `big_customers`.
 
 ### Your own functions
 
