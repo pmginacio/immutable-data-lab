@@ -171,7 +171,7 @@ class RecordView[T]:
     def max(self, value: Any, default: Any = None) -> Any:
         return self._extreme(max, value, default)
 
-    def aggregate_by[K, R](self, key: K, func: Callable[..., R], value: Any = None) -> dict[K, R]:
+    def aggregate_by[K, R](self, key: K, func: Callable[..., R], value: Any = None) -> "Grouped[K, R]":
         """`func` of `value` over the records with each value of `key`, in key order; keys with no records are left out.
 
         `key` is a value or a tuple of values, as in `sorted`.
@@ -183,14 +183,7 @@ class RecordView[T]:
         many = isinstance(key, tuple)
         keys = tuple(own_value(self._meta.cls, k) for k in (key if many else (key,)))
         own = None if value is None else self._aggregated(aggregate, value)
-        sql, params = aggregate_sql(self._query, aggregate, own, keys)
-        rows = self._conn.execute(sql, params).fetchall()
-        key_types = [result_type(k) for k in keys]
-        value_type = aggregate.result or result_type(own)
-        groups: dict[Any, Any] = {
-            tuple(map(from_sql, row[:-1], key_types)): from_sql(row[-1], value_type) for row in rows
-        }
-        return groups if many else {k: v for (k,), v in groups.items()}
+        return Grouped(self._conn, self._query, aggregate, own, keys, many)
 
     def _aggregated(self, aggregate: Aggregate[Any], value: object) -> Value:
         """`value` as a value of the records of this view that `aggregate` can take."""
@@ -213,6 +206,37 @@ class RecordView[T]:
     def _aggregate(self, aggregate: Aggregate[Any], value: Value | None = None) -> Any:
         sql, params = aggregate_sql(self._query, aggregate, value)
         return self._conn.execute(sql, params).fetchone()[0]
+
+
+@dataclass(frozen=True, eq=False, repr=False)
+class Grouped[K, V](Mapping[K, V]):
+    """What `aggregate_by` gives: a read-only mapping from each key to its value. Every read runs its query again."""
+
+    _conn: sqlite3.Connection
+    _query: Query
+    _aggregate: Aggregate[Any]
+    _value: Value | None
+    _keys: tuple[Value, ...]
+    _many: bool  # keys are tuples, as `aggregate_by` was given a tuple of values
+
+    def __getitem__(self, key: K) -> V:
+        return self._read()[key]
+
+    def __iter__(self) -> Iterator[K]:
+        return iter(self._read())
+
+    def __len__(self) -> int:
+        return len(self._read())
+
+    def _read(self) -> dict[Any, Any]:
+        sql, params = aggregate_sql(self._query, self._aggregate, self._value, self._keys)
+        key_types = [result_type(k) for k in self._keys]
+        value_type = self._aggregate.result or result_type(self._value)
+        groups = {
+            tuple(map(from_sql, row[:-1], key_types)): from_sql(row[-1], value_type)
+            for row in self._conn.execute(sql, params)
+        }
+        return groups if self._many else {k: v for (k,), v in groups.items()}
 
 
 @dataclass(frozen=True, eq=False)

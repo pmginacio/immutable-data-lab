@@ -8,6 +8,7 @@ from typing import Any, assert_type
 
 from inlay import (
     Db,
+    Grouped,
     RecordSet,
     RecordView,
     Ref,
@@ -62,12 +63,12 @@ def _tables(db: Db) -> None:
     assert_type(view.min(Order.total), int | None)
     assert_type(view.max(Order.total, default=0), int)
     assert_type(o in view, bool)
-    assert_type(view.aggregate_by(Order.total, len), dict[int, int])
-    assert_type(view.aggregate_by(Order.total, sum, Order.total), dict[int, int])
-    assert_type(view.aggregate_by(Order.total, avg, Order.total), dict[int, float])
-    assert_type(view.aggregate_by((Order.id, Order.total), len), dict[tuple[str, int], int])
+    assert_type(view.aggregate_by(Order.total, len), Grouped[int, int])
+    assert_type(view.aggregate_by(Order.total, sum, Order.total), Grouped[int, int])
+    assert_type(view.aggregate_by(Order.total, avg, Order.total), Grouped[int, float])
+    assert_type(view.aggregate_by((Order.id, Order.total), len), Grouped[tuple[str, int], int])
     # pyright cannot pick one of the overloads of the built-in `max`.
-    assert_type(view.aggregate_by(Order.total, max, Order.total), dict[int, Any])
+    assert_type(view.aggregate_by(Order.total, max, Order.total), Grouped[int, Any])
     for order in view:
         assert_type(order, Order)
     rows = db[Order].project(OrderRow).filter(OrderRow.city == "Lisbon")

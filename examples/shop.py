@@ -213,7 +213,7 @@ def revenue_by_customer(db: Db) -> list[tuple[Customer, int]]:
     return [(customers[customer_id], total) for customer_id, total in revenue.most_common()]
 
 
-def orders_per_month(db: Db) -> dict[date, int]:
+def orders_per_month(db: Db) -> Mapping[date, int]:
     # inlay: functions such as `to_month` work wherever a field does, and `len` counts.
     return db[Order].aggregate_by(to_month(Order.placed), len)
 
@@ -222,7 +222,7 @@ def orders_per_month(db: Db) -> dict[date, int]:
 hour = Function("hour", datetime, int, lambda x: x.hour, "CAST(strftime('%H', {}) AS INTEGER)")
 
 
-def orders_per_hour(db: Db) -> dict[int, int]:
+def orders_per_hour(db: Db) -> Mapping[int, int]:
     return db[Order].aggregate_by(hour(Order.placed), len)
 
 
