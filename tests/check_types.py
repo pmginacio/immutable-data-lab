@@ -6,7 +6,22 @@ Each `# type: ignore` marks an expected error; pyright reports any that is no lo
 from dataclasses import replace
 from typing import Any, assert_type
 
-from inlay import Db, RecordSet, RecordView, Ref, all_of, any_of, avg, contains, entity, key, negate, none_of, one_of
+from inlay import (
+    Db,
+    RecordSet,
+    RecordView,
+    Ref,
+    all_of,
+    any_of,
+    avg,
+    contains,
+    entity,
+    key,
+    negate,
+    none_of,
+    one_of,
+    projection,
+)
 from inlay.nodes import And
 
 
@@ -55,6 +70,16 @@ def _tables(db: Db) -> None:
     assert_type(view.aggregate_by(Order.total, max, Order.total), dict[int, Any])
     for order in view:
         assert_type(order, Order)
+    rows = db[Order].project(OrderRow).filter(OrderRow.city == "Lisbon")
+    assert_type(rows, RecordView[OrderRow])
+    for row in rows:
+        assert_type(row.city, str)
+
+
+@projection(Order)
+class OrderRow:
+    id: str
+    city: str = Order.customer.city
 
 
 def _conditions() -> None:
@@ -75,3 +100,4 @@ def _expected_errors() -> None:
     o.total = 3  # type: ignore
     Order.totl  # type: ignore
     Order.customer.nmae  # type: ignore
+    OrderRow(id="o1").city = "Faro"  # type: ignore

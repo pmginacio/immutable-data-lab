@@ -8,6 +8,7 @@ from types import TracebackType
 from typing import Any, Self, overload
 
 from inlay.conditions import own_value
+from inlay.entity import projection_of
 from inlay.functions import Aggregate, aggregate_of
 from inlay.meta import EntityMeta, meta, reachable, table_name
 from inlay.meta import metas as entity_metas
@@ -15,6 +16,7 @@ from inlay.nodes import (
     Compare,
     Condition,
     Filter,
+    Project,
     Query,
     Slice,
     Sort,
@@ -24,7 +26,7 @@ from inlay.nodes import (
     check_condition,
     classes_read,
     describe,
-    record_class,
+    record_meta,
     result_type,
 )
 from inlay.sql import (
@@ -87,7 +89,7 @@ class RecordView[T]:
 
     @property
     def _meta(self) -> EntityMeta:
-        return meta(record_class(self._query))
+        return record_meta(self._query)
 
     def __iter__(self) -> Iterator[T]:
         sql, params = select_sql(self._query)
@@ -132,6 +134,20 @@ class RecordView[T]:
 
     def get(self, key: str) -> T | None:
         return next(iter(self.filter(Compare(self._meta.key, "==", key))), None)
+
+    def project[P](self, cls: type[P]) -> "RecordView[P]":
+        """These records in the shape of the projection `cls`, whose fields filters and sorting use after it."""
+        projection = projection_of(cls)
+        if projection.root is not self._meta.cls:
+            root, here = projection.root.__name__, self._meta.cls.__name__
+            raise TypeError(f"{cls.__name__} is a projection of {root}, not of {here}")
+        source = self._query
+        while isinstance(source, Filter):
+            source = source.source
+        if not isinstance(source, Table):
+            # A subquery keeps no order in SQL, so an order or a slice of the root would be lost.
+            raise ValueError("project comes after filters only; sort and slice after it, by its fields")
+        return RecordView(self._conn, self._open_iterations, Project(self._query, projection))
 
     @overload
     def sum(self, value: int) -> int: ...

@@ -5,8 +5,9 @@ from dataclasses import Field, dataclass, field, fields
 from types import NoneType, UnionType
 from typing import Any, dataclass_transform, get_args, get_origin, overload
 
-from inlay.conditions import Expr
-from inlay.meta import EntityMeta, FieldMeta, table_name
+from inlay.conditions import Expr, own_value
+from inlay.meta import EntityMeta, FieldMeta, meta, table_name
+from inlay.nodes import BinOp, Call, Projection, RefValue, Value, result_type
 from inlay.types import SQL_TYPES
 
 _KEY = "inlay_key"
@@ -73,6 +74,74 @@ def _make_entity(cls: type, indexes: tuple[tuple[str, ...], ...]) -> type:
     return new
 
 
+@dataclass_transform(frozen_default=True, kw_only_default=True)
+def projection[C](root: type) -> Callable[[type[C]], type[C]]:
+    """Makes a class a read-only shape of the records of `root`, read with `view.project(cls)`.
+
+    A field named as a field of `root` takes its value; any other field is given its value, such as
+    `city: str = Order.customer.city`. One field must take the key of `root`.
+    """
+    root_meta = meta(root)
+
+    def wrap(cls: type) -> type:
+        values = {name: v for name, v in vars(cls).items() if isinstance(v, Expr)}
+        for name in values:
+            delattr(cls, name)  # so that dataclass does not take them as defaults
+        new = dataclass(frozen=True, slots=True, kw_only=True)(cls)
+        hints = get_annotations(new)
+        found = [_projected(new, root_meta, f.name, hints[f.name], values) for f in fields(new)]
+        field_metas = tuple(fm for fm, _ in found)
+        if not any(fm.is_key for fm in field_metas):
+            raise TypeError(f"{new.__name__} needs a field with the key of {root.__name__}, {root_meta.key.name}")
+        if clashes := [fm.name for fm in field_metas if fm.name in _EXPR_METHODS]:
+            names = ", ".join(clashes)
+            raise TypeError(f"{new.__name__} cannot have fields named {names}: field references use these names")
+        m = EntityMeta(new, "", field_metas, ())  # no table: its rows come from a SELECT of the root
+        setattr(new, "__inlay_projection__", Projection(root, m, tuple(v for _, v in found)))
+        for fm in field_metas:
+            setattr(new, fm.name, _Field(new.__dict__[fm.name], fm))
+        return new
+
+    return wrap
+
+
+def projection_of(cls: type) -> Projection:
+    p = cls.__dict__.get("__inlay_projection__")
+    if not isinstance(p, Projection):
+        raise TypeError(f"{cls.__name__} is not a @projection class")
+    return p
+
+
+def _projected(owner: type, root: EntityMeta, name: str, hint: Any, values: dict[str, Expr]) -> tuple[FieldMeta, Value]:
+    """The field `name` of the projection `owner`, and its value on a record of `root`."""
+    if name in values:
+        value = own_value(root.cls, values[name])
+    elif name in {f.name for f in root.fields}:
+        value = root.field(name)
+    else:
+        raise TypeError(f"{owner.__name__}.{name} is not a field of {root.cls.__name__}, so it needs a value")
+    py_type, optional = _without_none(hint)
+    if (py_type, optional) != (result_type(value), _may_be_none(value)):
+        expected = result_type(value).__name__ + (" | None" if _may_be_none(value) else "")
+        raise TypeError(f"{owner.__name__}.{name} is typed {hint!r}, but its value is a {expected}")
+    return FieldMeta(owner, name, py_type, value == root.key, None, optional), value
+
+
+def _may_be_none(value: object) -> bool:
+    """Whether `value` can be None on a record: an optional field, or a value read through an optional `Ref`."""
+    match value:
+        case FieldMeta():
+            return value.optional
+        case RefValue(refs, inner):
+            return any(r.optional for r in refs) or _may_be_none(inner)
+        case Call(_, arg):
+            return _may_be_none(arg)
+        case BinOp(_, left, right):
+            return _may_be_none(left) or _may_be_none(right)
+        case _:
+            return False  # a number in arithmetic
+
+
 def _entity_meta(cls: type, indexes: tuple[tuple[str, ...], ...]) -> EntityMeta:
     # FORWARDREF leaves names that do not exist yet, such as the class itself, as forward references.
     hints = get_annotations(cls, format=Format.FORWARDREF)
@@ -85,13 +154,18 @@ def _entity_meta(cls: type, indexes: tuple[tuple[str, ...], ...]) -> EntityMeta:
 def _field_meta(owner: type, f: Field[Any], hint: Any) -> FieldMeta:
     is_key = bool(f.metadata.get(_KEY))
     ref, value = get_args(hint) if get_origin(hint) is Ref else (None, hint)
-    optional = isinstance(value, UnionType) and NoneType in get_args(value)
-    if optional:
-        others = [arg for arg in get_args(value) if arg is not NoneType]
-        value = others[0] if len(others) == 1 else value
+    value, optional = _without_none(value)
     if value not in SQL_TYPES or (ref is not None and value is not str):
         raise TypeError(f"{owner.__name__}.{f.name} has unsupported type {hint!r}")
     return FieldMeta(owner, f.name, value, is_key, ref, optional)
+
+
+def _without_none(hint: Any) -> tuple[Any, bool]:
+    """`hint` without its `| None`, and whether it had one; a union of other types stays as it is."""
+    if not (isinstance(hint, UnionType) and NoneType in get_args(hint)):
+        return hint, False
+    others = [arg for arg in get_args(hint) if arg is not NoneType]
+    return (others[0] if len(others) == 1 else hint), True
 
 
 def _check(cls_name: str, field_metas: tuple[FieldMeta, ...], indexes: tuple[tuple[str, ...], ...]) -> None:

@@ -10,7 +10,7 @@ from inlay.db import (
     StoreError,
     open,
 )
-from inlay.entity import Ref, entity, key
+from inlay.entity import Ref, entity, key, projection
 from inlay.functions import Aggregate, Function, avg, to_day, to_month
 from inlay.nodes import Condition, all_of, any_of, negate, none_of
 
@@ -38,6 +38,7 @@ __all__ = [
     "none_of",
     "one_of",
     "open",
+    "projection",
     "to_day",
     "to_month",
 ]

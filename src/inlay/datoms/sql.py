@@ -17,6 +17,7 @@ from inlay.nodes import (
     Match,
     Not,
     Or,
+    Project,
     Query,
     RefValue,
     Slice,
@@ -435,6 +436,8 @@ def _select(query: Query, tx: int | None) -> _Select:
             return replace(select, order=tuple((k, reverse) for k in keys) + select.order)
         case Slice(source, start, stop):
             return replace(_open(_select(source, tx)), slice=(start, stop))
+        case Project():
+            raise TypeError("the paused history experiments do not read projections")
 
 
 def _open(select: _Select) -> _Select:

@@ -16,6 +16,7 @@ from inlay.nodes import (
     Match,
     Not,
     Or,
+    Project,
     Query,
     RefValue,
     Slice,
@@ -289,6 +290,13 @@ def _select(query: Query) -> _Select:
             return replace(select, order=tuple((k, reverse) for k in keys) + select.order)
         case Slice(source, start, stop):
             return replace(_open(_select(source)), slice=(start, stop))
+        case Project(source, projection):
+            # The rows of the root with a column for each field, so whatever comes after reads them as a table.
+            parts = [value_sql(v) for v in projection.values]
+            fields = projection.m.fields
+            columns = ", ".join(f"{sql} AS {_column(f)}" for (sql, _), f in zip(parts, fields, strict=True))
+            sql, params = _render(_select(source), columns)
+            return _Select(projection.m, f"({sql})", (*(p for _, ps in parts for p in ps), *params))
 
 
 def _open(select: _Select) -> _Select:

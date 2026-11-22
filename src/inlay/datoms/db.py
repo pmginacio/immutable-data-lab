@@ -60,7 +60,7 @@ from inlay.nodes import (
     check_condition,
     classes_read,
     describe,
-    record_class,
+    record_meta,
     result_type,
 )
 from inlay.types import from_sql, to_sql
@@ -80,7 +80,7 @@ class RecordView[T]:
 
     @property
     def _meta(self) -> EntityMeta:
-        return meta(record_class(self._query))
+        return record_meta(self._query)
 
     def __iter__(self) -> Iterator[T]:
         sql, params = select_sql(self._query, self._tx)

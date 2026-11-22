@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from inlay.functions import Function
-from inlay.meta import FieldMeta
+from inlay.meta import EntityMeta, FieldMeta, meta
 
 type CompareOp = Literal["==", "!=", "<", "<=", ">", ">="]
 type ArithmeticOp = Literal["+", "-", "*", "/"]
@@ -60,7 +60,24 @@ class Slice:
     stop: int | None
 
 
-type Query = Table | Filter | Sort | Slice
+@dataclass(frozen=True)
+class Projection:
+    """A read-only shape of the records of `root`: `m` describes its fields, and `values` gives each one's value."""
+
+    root: type
+    m: EntityMeta
+    values: tuple[Value, ...]
+
+
+@dataclass(frozen=True)
+class Project:
+    """The records of `source`, a filtered view of the root of `projection`, in the shape of the projection."""
+
+    source: Query
+    projection: Projection
+
+
+type Query = Table | Filter | Sort | Slice | Project
 
 
 class Condition:
@@ -150,12 +167,15 @@ def check_condition(cls: type, cond: Condition) -> None:
             raise ValueError(f"{field.owner.__name__}.{field.name} cannot be used on {cls.__name__}")
 
 
-def record_class(query: Query) -> type:
+def record_meta(query: Query) -> EntityMeta:
+    """What the records of `query` are: an entity, or a projection."""
     match query:
         case Table(cls):
-            return cls
+            return meta(cls)
+        case Project(_, projection):
+            return projection.m
         case Filter(source) | Sort(source) | Slice(source):
-            return record_class(source)
+            return record_meta(source)
 
 
 def classes_read(node: Query | Condition) -> set[type]:
@@ -166,8 +186,9 @@ def classes_read(node: Query | Condition) -> set[type]:
         case Filter(source, cond):
             return classes_read(source) | classes_read(cond)
         case Sort(source, keys):
-            referenced = {r.target for key in keys if isinstance(key, RefValue) for r in key.refs}
-            return classes_read(source) | {t for t in referenced if t is not None}
+            return classes_read(source).union(*map(_classes_reached, keys))
+        case Project(source, projection):
+            return classes_read(source).union(*map(_classes_reached, projection.values))
         case Slice(source):
             return classes_read(source)
         case In(field, Filter() as records):
@@ -178,6 +199,13 @@ def classes_read(node: Query | Condition) -> set[type]:
             return classes_read(item)
         case _:
             return {f.owner for f in _fields(node)}
+
+
+def _classes_reached(value: Value) -> set[type]:
+    """The classes whose records `value` reads through `Ref`s."""
+    if not isinstance(value, RefValue):
+        return set()
+    return {r.target for r in value.refs if r.target is not None}
 
 
 def result_type(value: object) -> type:
