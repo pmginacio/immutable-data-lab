@@ -177,7 +177,12 @@ class Query[T]:
     def max(self, value: Any, default: Any = None) -> Any:
         return self._extreme(max, value, default)
 
-    def aggregate_by[K, R](self, key: K, func: Callable[..., R], value: Any = None) -> "Grouped[K, R]":
+    # A `Ref` field is typed as its class on the class, so it can lead to that class's fields; its groups hold keys.
+    @overload
+    def aggregate_by[R](self, key: type, func: Callable[..., R], value: Any = None) -> "Grouped[str, R]": ...
+    @overload
+    def aggregate_by[K, R](self, key: K, func: Callable[..., R], value: Any = None) -> "Grouped[K, R]": ...
+    def aggregate_by(self, key: Any, func: Callable[..., Any], value: Any = None) -> "Grouped[Any, Any]":
         """`func` of `value` over the records with each value of `key`, in key order; keys with no records are left out.
 
         `key` is a value or a tuple of values, as in `sorted`.
