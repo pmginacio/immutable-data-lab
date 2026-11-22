@@ -2,7 +2,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from inlay.functions import Function
+from inlay.functions import Aggregate, Function
 from inlay.meta import EntityMeta, FieldMeta, meta
 
 type CompareOp = Literal["==", "!=", "<", "<=", ">", ">="]
@@ -30,7 +30,21 @@ class RefValue:
     value: Value
 
 
-type Value = FieldMeta | Call | BinOp | RefValue
+@dataclass(frozen=True)
+class GroupValue:
+    """`aggregate` of `value` over the records of `source` whose `keys` equal `at`, values of the record at hand.
+
+    It is what `aggregate_by` gives for those keys, and None when no record of `source` has them.
+    """
+
+    source: Query
+    aggregate: Aggregate[Any]
+    value: Value | None
+    keys: tuple[Value, ...]
+    at: tuple[Value, ...]
+
+
+type Value = FieldMeta | Call | BinOp | RefValue | GroupValue
 
 
 @dataclass(frozen=True)
@@ -191,6 +205,8 @@ def classes_read(node: Query | Condition) -> set[type]:
             return classes_read(source).union(*map(_classes_reached, projection.values))
         case Slice(source):
             return classes_read(source)
+        case Compare(left, _, right):
+            return {f.owner for f in _fields(node)} | _classes_reached(left) | _classes_reached(right)
         case In(field, Filter() as records):
             return {field.owner} | classes_read(records)
         case And(items) | Or(items):
@@ -201,11 +217,19 @@ def classes_read(node: Query | Condition) -> set[type]:
             return {f.owner for f in _fields(node)}
 
 
-def _classes_reached(value: Value) -> set[type]:
-    """The classes whose records `value` reads through `Ref`s."""
-    if not isinstance(value, RefValue):
-        return set()
-    return {r.target for r in value.refs if r.target is not None}
+def _classes_reached(value: object) -> set[type]:
+    """The classes whose records `value` reads besides the record at hand: through `Ref`s, or in the groups it looks up."""
+    match value:
+        case RefValue(refs):
+            return {r.target for r in refs if r.target is not None}
+        case GroupValue(source, _, inner, keys, at):
+            return classes_read(source).union(*map(_classes_reached, (inner, *keys, *at)))
+        case Call(_, arg):
+            return _classes_reached(arg)
+        case BinOp(_, left, right):
+            return _classes_reached(left) | _classes_reached(right)
+        case _:
+            return set()
 
 
 def result_type(value: object) -> type:
@@ -225,6 +249,8 @@ def result_type(value: object) -> type:
             return float if op == "/" or float in types else int
         case RefValue(_, inner):
             return result_type(inner)
+        case GroupValue(_, aggregate, inner):
+            return aggregate.result or result_type(inner)
         case _:
             return type(value)
 
@@ -242,7 +268,7 @@ def describe(value: object) -> str:
             return f"{value.owner.__name__}.{value.name}"
         case RefValue(refs, FieldMeta() as field):
             return ".".join([describe(refs[0]), *(r.name for r in refs[1:]), field.name])
-        case Call() | BinOp() | RefValue():
+        case Call() | BinOp() | RefValue() | GroupValue():
             return "a computed value"
         case _:
             return repr(value)
@@ -260,6 +286,9 @@ def value_fields(value: object) -> Iterator[FieldMeta]:
         case BinOp(_, left, right):
             yield from value_fields(left)
             yield from value_fields(right)
+        case GroupValue(at=at):
+            for v in at:
+                yield from value_fields(v)
 
 
 def _fields(cond: Condition) -> Iterator[FieldMeta]:

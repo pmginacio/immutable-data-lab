@@ -7,15 +7,16 @@ from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Any, Self, overload
 
-from inlay.conditions import own_value
+from inlay.conditions import Expr, own_value, record_values
 from inlay.entity import projection_of
 from inlay.functions import Aggregate, aggregate_of
-from inlay.meta import EntityMeta, meta, reachable, table_name
+from inlay.meta import EntityMeta, FieldMeta, meta, reachable, table_name
 from inlay.meta import metas as entity_metas
 from inlay.nodes import (
     Compare,
     Condition,
     Filter,
+    GroupValue,
     Project,
     Query,
     Slice,
@@ -210,7 +211,12 @@ class RecordView[T]:
 
 @dataclass(frozen=True, eq=False, repr=False)
 class Grouped[K, V](Mapping[K, V]):
-    """What `aggregate_by` gives: a read-only mapping from each key to its value. Every read runs its query again."""
+    """What `aggregate_by` gives: a read-only mapping from each key to its value. Every read runs its query again.
+
+    Given a field instead of a key, as in `totals[Order.customer]`, it gives the value of each record's own key
+    for use in queries, as in `db[Order].filter(Order.total == biggest[Order.customer])`;
+    the value is None for a key with no records.
+    """
 
     _conn: sqlite3.Connection
     _query: Query
@@ -220,13 +226,23 @@ class Grouped[K, V](Mapping[K, V]):
     _many: bool  # keys are tuples, as `aggregate_by` was given a tuple of values
 
     def __getitem__(self, key: K) -> V:
-        return self._read()[key]
+        if (found := record_values(key if self._many and isinstance(key, tuple) else (key,))) is None:
+            return self._read()[key]
+        return self._looked_up(*found)
 
     def __iter__(self) -> Iterator[K]:
         return iter(self._read())
 
     def __len__(self) -> int:
         return len(self._read())
+
+    def _looked_up(self, relations: tuple[FieldMeta, ...], at: tuple[Value, ...]) -> Any:
+        if len(at) != len(self._keys):
+            raise TypeError(f"the keys are {len(self._keys)} values, got {len(at)}")
+        for value, k in zip(at, self._keys):
+            if (t := result_type(value)) is not result_type(k):
+                raise TypeError(f"{describe(value)} is a {t.__name__}, but the keys are a {result_type(k).__name__}")
+        return Expr(relations, GroupValue(self._query, self._aggregate, self._value, self._keys, at))
 
     def _read(self) -> dict[Any, Any]:
         sql, params = aggregate_sql(self._query, self._aggregate, self._value, self._keys)

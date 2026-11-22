@@ -12,6 +12,7 @@ from inlay.nodes import (
     CompareOp,
     Condition,
     Filter,
+    GroupValue,
     In,
     Match,
     Not,
@@ -208,6 +209,13 @@ def value_sql(value: object) -> tuple[str, list[object]]:
             return f"({left_sql} {op} {right_sql})", left_params + right_params
         case RefValue(refs, inner):
             return _ref_value_sql(refs, inner, 0)
+        case GroupValue(source, aggregate, inner, keys, at):
+            grouped, grouped_params = aggregate_sql(source, aggregate, inner, keys)
+            parts = [value_sql(v) for v in at]
+            # The columns of `grouped` start with _inlay_, so the fields `at` names are read from the record at hand.
+            match = " AND ".join(f"{_GROUP_KEY.format(i)} IS {sql}" for i, (sql, _) in enumerate(parts))
+            sql = f"(SELECT {_GROUP_VALUE} FROM ({grouped}) WHERE {match})"
+            return sql, grouped_params + [p for _, params in parts for p in params]
         case _:
             return "?", [to_sql(value)]
 
@@ -246,6 +254,10 @@ def select_sql(query: Query) -> tuple[str, list[object]]:
     return _render(select, _columns(select.m))
 
 
+_GROUP_KEY = quote("_inlay_key{}")
+_GROUP_VALUE = quote("_inlay_value")
+
+
 def aggregate_sql(
     query: Query, aggregate: Aggregate[Any], value: Value | None = None, keys: tuple[Value, ...] = ()
 ) -> tuple[str, list[object]]:
@@ -256,7 +268,8 @@ def aggregate_sql(
     inner, inner_params = select_sql(query)
     parts = [value_sql(k) for k in keys]
     value_part, value_params = ("", []) if value is None else value_sql(value)
-    columns = [sql for sql, _ in parts] + [aggregate.sql.format(value_part)]
+    columns = [f"{sql} AS {_GROUP_KEY.format(i)}" for i, (sql, _) in enumerate(parts)]
+    columns.append(f"{aggregate.sql.format(value_part)} AS {_GROUP_VALUE}")
     sql = f"SELECT {', '.join(columns)} FROM ({inner}) AS {_row(0)}"
     if keys:
         # Numbers stand for the columns of the result, so each key and its parameters appear only once.

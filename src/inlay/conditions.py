@@ -143,6 +143,19 @@ def own_value(cls: type, value: object) -> Value:
     return own
 
 
+def record_values(values: tuple[object, ...]) -> tuple[tuple[FieldMeta, ...], tuple[Value, ...]] | None:
+    """The relations and values of `values` if they are values of one record, such as `(Ad.town, Ad.rooms)`.
+
+    None if they are plain values, such as `("Faro", 2)`.
+    """
+    if not any(isinstance(v, Expr) for v in values):
+        return None
+    parts = [_parts(v) for v in values]
+    if len({(relations, next(value_fields(v)).owner) for relations, v in parts}) > 1:
+        raise ValueError("only values of the same record can be combined")
+    return parts[0][0], tuple(v for _, v in parts)
+
+
 def _through(relations: tuple[FieldMeta, ...], cond: Condition) -> Condition:
     """`cond`, on the record reached through `relations`, as a condition on the record of the first relation.
 

@@ -1,9 +1,9 @@
-"""What aggregate_by gives: a mapping read from the db."""
+"""What aggregate_by gives: a mapping read from the db, which queries can also look up by the fields of their records."""
 
 import pytest
 
 import inlay
-from inlay import Ref, entity, key
+from inlay import Ref, entity, is_none, key
 
 
 @entity
@@ -33,3 +33,45 @@ def test_every_read_runs_its_query_again(db):
     assert dict(totals) == {"ana": 200}
     db.add(Order(id="o3", customer="bob", total=30))
     assert (totals["bob"], len(totals), "bob" in totals) == (30, 2, True)
+
+
+def ids(view):
+    return sorted(r.id for r in view)
+
+
+def test_a_query_reads_the_value_of_each_records_own_group(db):
+    biggest = db[Order].aggregate_by(Order.customer, max, Order.total)
+    biggest_orders = db[Order].filter(Order.total == biggest[Order.customer])
+    assert ids(biggest_orders) == ["o1"]
+    db.add(Order(id="o3", customer="bob", total=30))
+    assert ids(biggest_orders) == ["o1", "o3"]
+
+
+def test_another_class_looks_it_up_by_its_key_and_gets_none_for_a_key_with_no_records(db):
+    totals = db[Order].aggregate_by(Order.customer, sum, Order.total)
+    assert ids(db[Customer].filter(totals[Customer.id] > 100)) == ["ana"]
+    assert ids(db[Customer].filter(is_none(totals[Customer.id]))) == ["bob"]
+
+
+def test_keys_read_through_a_ref_and_several_keys(db):
+    per_city = db[Order].aggregate_by(Order.customer.city, sum, Order.total)
+    assert ids(db[Order].filter(per_city[Order.customer.city] == 200)) == ["o1", "o2"]
+    pairs = db[Order].aggregate_by((Order.customer, Order.total), len)
+    assert ids(db[Order].filter(pairs[Order.customer, Order.total] == 1)) == ["o1", "o2"]
+
+
+def test_it_is_looked_up_with_values_like_its_keys(db):
+    totals = db[Order].aggregate_by(Order.customer, sum, Order.total)
+    with pytest.raises(TypeError, match="Order.total is a int, but the keys are a str"):
+        totals[Order.total]
+    with pytest.raises(TypeError, match="the keys are 2 values, got 1"):
+        db[Order].aggregate_by((Order.customer, Order.total), len)[Order.customer]
+    with pytest.raises(ValueError, match="Order.customer cannot be used on Customer"):
+        db[Customer].filter(totals[Order.customer] > 100)
+
+
+def test_writing_the_grouped_class_while_looping_is_refused(db):
+    totals = db[Order].aggregate_by(Order.customer, sum, Order.total)
+    with pytest.raises(RuntimeError, match="Order changed during iteration"):
+        for _ in db[Customer].filter(totals[Customer.id] > 100):
+            db.add(Order(id="o3", customer="bob", total=30))

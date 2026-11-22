@@ -7,7 +7,7 @@ from typing import Any, dataclass_transform, get_args, get_origin, overload
 
 from inlay.conditions import Expr, own_value
 from inlay.meta import EntityMeta, FieldMeta, meta, table_name
-from inlay.nodes import BinOp, Call, Projection, RefValue, Value, result_type
+from inlay.nodes import BinOp, Call, GroupValue, Projection, RefValue, Value, result_type
 from inlay.types import SQL_TYPES
 
 _KEY = "inlay_key"
@@ -152,6 +152,8 @@ def _may_be_none(value: object) -> bool:
             return _may_be_none(arg)
         case BinOp(_, left, right):
             return _may_be_none(left) or _may_be_none(right)
+        case GroupValue():
+            return True  # a key with no records
         case _:
             return False  # a number in arithmetic
 

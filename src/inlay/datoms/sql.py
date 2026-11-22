@@ -13,6 +13,7 @@ from inlay.nodes import (
     CompareOp,
     Condition,
     Filter,
+    GroupValue,
     In,
     Match,
     Not,
@@ -366,6 +367,8 @@ def value_sql(value: object) -> tuple[str, list[object]]:
             return f"({left_sql} {op} {right_sql})", left_params + right_params
         case RefValue():
             raise TypeError(f"the datoms version does not support values read through a Ref yet: {describe(value)}")
+        case GroupValue():
+            raise TypeError("the datoms version does not support values of groups yet")
         case _:
             return "?", [to_sql(value)]
 
