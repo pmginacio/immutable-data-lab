@@ -1,3 +1,5 @@
+import hashlib
+import json
 import uuid
 from annotationlib import Format, get_annotations
 from collections.abc import Callable, Sequence
@@ -8,15 +10,33 @@ from typing import Any, dataclass_transform, get_args, get_origin, overload
 from inlay.conditions import Expr, own_value
 from inlay.meta import EntityMeta, FieldMeta, meta, table_name
 from inlay.nodes import BinOp, Call, GroupValue, Projection, RefValue, Value, result_type
-from inlay.types import SQL_TYPES
+from inlay.types import SQL_TYPES, to_sql
 
 _KEY = "inlay_key"
+_HASHED = "inlay_hashed"
 # Reading `Order.customer.startswith` gives the method, so a field with that name could not be reached.
 _EXPR_METHODS = {name for name in vars(Expr) if not name.startswith("__")}
 
 
 def key() -> Any:
     return field(default_factory=lambda: str(uuid.uuid7()), metadata={_KEY: True})
+
+
+def hashed() -> Any:
+    """A key computed from the other fields when the record is built, so records with the same values have the same key."""
+    return field(init=False, metadata={_KEY: True, _HASHED: True})
+
+
+def restored(cls: type, values: dict[str, object]) -> Any:
+    """A record of `cls` with `values`, as read back from the db.
+
+    It is set field by field, without `__init__` or `__post_init__`, so a hashed key stays as stored.
+    """
+    record = object.__new__(cls)
+    for name, value in values.items():
+        # The class is frozen, and setting through `object` is how a frozen dataclass sets its own fields.
+        object.__setattr__(record, name, value)
+    return record
 
 
 class Ref[T, V = str]:
@@ -66,9 +86,34 @@ def entity(cls: type | None = None, /, *, indexes: Sequence[tuple[str, ...]] = (
 
 
 def _make_entity(cls: type, indexes: tuple[tuple[str, ...], ...]) -> type:
+    if any(isinstance(v, Field) and v.metadata.get(_HASHED) for v in vars(cls).values()):
+        _hash_key_on_init(cls)
     new = dataclass(frozen=True, slots=True, kw_only=True)(cls)
     m = _entity_meta(new, indexes)
     return _with_fields(new, "__inlay__", m, m)
+
+
+def _hash_key_on_init(cls: type) -> None:
+    """Gives `cls` a `__post_init__` that computes the key, before running the class's own.
+
+    It is set before `dataclass` runs, since the `__init__` that `dataclass` writes calls only a `__post_init__` it finds.
+    """
+    own = vars(cls).get("__post_init__")
+
+    def __post_init__(self: object) -> None:
+        m = meta(type(self))
+        object.__setattr__(self, m.key.name, _content_hash(m, self))
+        if own is not None:
+            own(self)
+
+    setattr(cls, "__post_init__", __post_init__)
+
+
+def _content_hash(m: EntityMeta, record: object) -> str:
+    """The SHA-256 of the stored values of the fields other than the key, such as a datetime in UTC."""
+    values = [[f.name, to_sql(getattr(record, f.name))] for f in m.fields if not f.is_key]
+    text = json.dumps([[name, v.hex() if isinstance(v, bytes) else v] for name, v in values], ensure_ascii=False)
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
 @dataclass_transform(frozen_default=True, kw_only_default=True)

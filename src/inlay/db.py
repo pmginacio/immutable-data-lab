@@ -8,7 +8,7 @@ from types import TracebackType
 from typing import Any, Self, overload
 
 from inlay.conditions import Expr, own_value, record_values
-from inlay.entity import projection_of
+from inlay.entity import projection_of, restored
 from inlay.functions import Aggregate, aggregate_of
 from inlay.meta import EntityMeta, FieldMeta, meta, reachable, table_name
 from inlay.meta import metas as entity_metas
@@ -523,7 +523,7 @@ def _rows(m: EntityMeta, objs: Iterable[object]) -> Iterator[tuple[object, ...]]
 
 
 def _from_row(m: EntityMeta, row: Sequence[object]) -> Any:
-    return m.cls(**{f.name: from_sql(value, f.py_type) for f, value in zip(m.fields, row, strict=True)})
+    return restored(m.cls, {f.name: from_sql(value, f.py_type) for f, value in zip(m.fields, row, strict=True)})
 
 
 # Relative to the current directory, like any relative path.

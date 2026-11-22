@@ -10,6 +10,7 @@ from typing import Any, Self, overload
 
 from inlay.conditions import own_value
 from inlay.db import AlreadyExists, BrokenRef, Missing, SchemaMismatch
+from inlay.entity import restored
 from inlay.functions import Aggregate, aggregate_of
 from inlay.datoms.sql import (
     BEGIN,
@@ -417,7 +418,7 @@ def _rows(m: EntityMeta, objs: Iterable[object]) -> Iterator[tuple[object, ...]]
 
 
 def _from_row(m: EntityMeta, row: Sequence[object]) -> Any:
-    return m.cls(**{f.name: from_sql(value, f.py_type) for f, value in zip(m.fields, row, strict=True)})
+    return restored(m.cls, {f.name: from_sql(value, f.py_type) for f, value in zip(m.fields, row, strict=True)})
 
 
 DEFAULT_PATH = ".inlay-datoms.db"

@@ -11,7 +11,7 @@ from inlay.db import (
     StoreError,
     open,
 )
-from inlay.entity import Ref, entity, key, projection
+from inlay.entity import Ref, entity, hashed, key, projection
 from inlay.functions import Aggregate, Function, avg, to_day, to_month
 from inlay.nodes import Condition, all_of, any_of, negate, none_of
 
@@ -34,6 +34,7 @@ __all__ = [
     "avg",
     "contains",
     "entity",
+    "hashed",
     "is_none",
     "key",
     "negate",

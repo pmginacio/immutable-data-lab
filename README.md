@@ -238,6 +238,28 @@ The key cannot be optional, and other unions, such as `int | str`, are refused.
 Type checkers flag ordering comparisons on an optional field, such as `Order.discount > 1`, because `None > 1` is an error in Python.
 They also flag `= None` as the default of an optional reference, so it is passed explicitly.
 
+### Keys from the values
+
+`hashed()` instead of `key()` makes the key the SHA-256 of the other fields, so records with the same values have the same key.
+It suits values that many records point to, such as an address that every night's sighting of a house repeats: `db.update(address)` stores it once.
+
+```python
+from inlay import hashed
+
+@entity
+class Address:
+    id: str = hashed()
+    street: str
+    town: str
+
+Address(street="Rua do Sol", town="Faro").id == Address(street="Rua do Sol", town="Faro").id  # True
+```
+
+The key is computed when a record is built, also by `replace`, and cannot be passed; type checkers still offer it.
+The hash reads the values as they are stored, so a datetime gives the same key in any time zone.
+Changing the fields of the class changes every key, and the records that point to them must be migrated in the same step.
+A record read back from the db is restored as it was stored, so a `__post_init__` runs only when a record is built.
+
 ### Computed values and reports
 
 Values can be computed, and the db does the work, so reports add up many records without loading them.
