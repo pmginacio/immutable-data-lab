@@ -349,9 +349,11 @@ class Db:
         """Runs `write` on the records of each class, all in one transaction."""
         groups = _grouped(objs)
         _raise_if_iterating(self._open_iterations, groups)
+        # Checked before the transaction, so a failed write does not undo the indexes a first check creates.
+        metas = [self._checked(cls) for cls in groups]
         with _transaction(self._conn, self._known):
-            for cls, group in groups.items():
-                write(self._conn, self._checked(cls), group)
+            for m, group in zip(metas, groups.values(), strict=True):
+                write(self._conn, m, group)
 
 
 def _check_in_file(conn: sqlite3.Connection, cls: type) -> list[type]:
