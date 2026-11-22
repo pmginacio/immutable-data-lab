@@ -132,7 +132,7 @@ def another_order() -> type:
 
 
 def test_two_classes_with_the_same_table_raise(open_db, path):
-    with open_db(path) as db, pytest.raises(TypeError, match="Order and .*Order use the same table"):
+    with open_db(path) as db, pytest.raises(TypeError, match="Order and .*Order both use the table 'order'"):
         db.register(Order, another_order())
 
 

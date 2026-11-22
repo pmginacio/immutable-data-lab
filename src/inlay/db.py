@@ -11,6 +11,7 @@ from urllib.parse import quote
 from inlay.conditions import own_value
 from inlay.functions import Aggregate, aggregate_of
 from inlay.meta import EntityMeta, meta, reachable, table_name
+from inlay.meta import metas as entity_metas
 from inlay.nodes import (
     Compare,
     Condition,
@@ -257,13 +258,11 @@ class Db:
 
         Each class its `Ref`s point to must have a table already, or be one of `classes`.
         """
-        metas = [meta(c) for c in classes]
+        metas = list(entity_metas(classes).values())  # raises if two of them use the same table
         with _transaction(self._conn, self._known):
             tables = self._tables()
             if stored := [m.cls.__name__ for m in metas if m.table in tables]:
                 raise SchemaMismatch(f"a table is already in this db for {', '.join(stored)}")
-            if shared := _shared_tables(metas):
-                raise TypeError(f"{shared} use the same table")
             targets = {f.target for m in metas for f in m.fields if f.target is not None} - set(classes)
             if missing := [t.__name__ for t in targets if meta(t).table not in tables]:
                 raise TypeError(f"{', '.join(missing)} must be registered first, or in the same call")
@@ -507,14 +506,6 @@ def _execute(conn: sqlite3.Connection, statements: str | Iterable[str]) -> None:
     # A string is also an iterable of strings, one for each character, so it is checked first.
     for statement in (statements,) if isinstance(statements, str) else statements:
         conn.execute(statement)
-
-
-def _shared_tables(metas: Iterable[EntityMeta]) -> str:
-    """The classes among `metas` that have the same table as another one, by name, or an empty string."""
-    by_table: defaultdict[str, list[str]] = defaultdict(list)
-    for m in metas:
-        by_table[m.table].append(m.cls.__qualname__)
-    return ", ".join(" and ".join(names) for names in by_table.values() if len(names) > 1)
 
 
 def _sync_indexes(conn: sqlite3.Connection, m: EntityMeta) -> None:
