@@ -32,6 +32,15 @@ class OrderRow:
     with_tax: float = Order.total * 1.25
 
 
+first_orders = query(Order).aggregate_by(Order.customer, min, Order.placed)
+
+
+@projection(Order)
+class OrderWithFirst:
+    id: str
+    customers_first: datetime | None = first_orders[Order.customer]
+
+
 RECORDS = [
     Customer(id="ana", name="Ana", city="Lisbon"),
     Customer(id="bob", name="Bob", city="Porto"),
@@ -79,6 +88,13 @@ def test_a_projected_view_sorts_slices_and_aggregates_by_its_fields(db):
 def test_a_projected_query_built_without_a_db_runs_on_one(db):
     lisbon = query(Order).project(OrderRow).filter(OrderRow.city == "Lisbon")
     assert ids(db[lisbon]) == ["o1"]
+
+
+def test_a_field_can_be_the_value_of_a_group(db):
+    db.add(Order(id="o4", customer="ana", total=10, placed=datetime(2026, 3, 1, tzinfo=UTC)))
+    rows = {r.id: r.customers_first for r in db[Order].project(OrderWithFirst)}
+    first = datetime(2026, 1, 5, tzinfo=UTC)
+    assert rows == {"o1": first, "o2": datetime(2026, 2, 7, tzinfo=UTC), "o3": datetime(2026, 2, 9, tzinfo=UTC), "o4": first}
 
 
 def test_sorting_or_slicing_before_it_is_refused(db):
