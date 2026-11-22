@@ -6,7 +6,6 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Any, Self, overload
-from urllib.parse import quote
 
 from inlay.conditions import own_value
 from inlay.functions import Aggregate, aggregate_of
@@ -303,6 +302,30 @@ class Db:
             fn(self)
             del self[old]
 
+    def rename(self, old: str, new: type) -> None:
+        """Renames the table of the class that was called `old` to the table of `new`, keeping its records.
+
+        The references to it in other tables and the names of its indexes follow, and then it must match `new`.
+        Nothing happens if the old table is gone and the table of `new` matches it.
+        """
+        old_table, m = table_name(old), meta(new)
+        with self.transaction():
+            tables = self._tables()
+            if old_table not in tables and tables.get(m.table) == create_table_sql(m):
+                return
+            if old_table not in tables:
+                raise SchemaMismatch(f"there is no table {old_table!r} to rename")
+            if m.table in tables:
+                raise SchemaMismatch(f"table {m.table!r} already exists")
+            # With foreign keys on, as on every connection of the db, SQLite also renames the references to the table.
+            self._conn.execute(rename_table_sql(old_table, m.table))
+            for name, sql in self._conn.execute(LIST_INDEXES, (m.table,)).fetchall():
+                if name.startswith(index_prefix(old_table)):
+                    _execute(self._conn, reprefix_index_sql(name, sql, old_table, m.table))
+            # Classes found matching the old table, or reaching it through a `Ref`, no longer do.
+            self._known.clear()
+            self._checked(new)
+
     def transaction(self) -> AbstractContextManager[None]:
         return _transaction(self._conn, self._known)
 
@@ -458,44 +481,13 @@ DEFAULT_PATH = ".inlay.db"
 
 def open(path: str | os.PathLike[str] = DEFAULT_PATH) -> Db:
     """The db in the file at `path`, created if there is none. `Db.register` creates the tables of classes."""
-    conn = _connect(path, create=True)
+    conn = sqlite3.connect(path, autocommit=True)
     try:
         _execute(conn, CONNECTION_SETUP)
     except BaseException:
         conn.close()
         raise
     return Db(conn)
-
-
-def rename(old: str, new: str, *, path: str | os.PathLike[str] = DEFAULT_PATH) -> None:
-    """Rename the table of the class called `old` to the one of the class called `new`, keeping its data.
-
-    The references to the table in the other tables and the names of its indexes follow the new name.
-    """
-    old_table, new_table = table_name(old), table_name(new)
-    conn = _connect(path, create=False)
-    try:
-        # With foreign keys on, SQLite also rewrites the references to the renamed table in the other tables.
-        _execute(conn, ("PRAGMA foreign_keys = ON", BEGIN))
-        tables = dict(conn.execute(LIST_TABLES))
-        if old_table not in tables:
-            raise SchemaMismatch(f"there is no table {old_table!r} to rename")
-        if new_table in tables:
-            raise SchemaMismatch(f"table {new_table!r} already exists")
-        conn.execute(rename_table_sql(old_table, new_table))
-        for name, sql in conn.execute(LIST_INDEXES, (new_table,)).fetchall():
-            if name.startswith(index_prefix(old_table)):
-                _execute(conn, reprefix_index_sql(name, sql, old_table, new_table))
-        conn.execute(COMMIT)
-    finally:
-        conn.close()  # also rolls back what was not committed
-
-
-def _connect(path: str | os.PathLike[str], *, create: bool) -> sqlite3.Connection:
-    if create:
-        return sqlite3.connect(path, autocommit=True)
-    # Read-write mode only, so a wrong path raises instead of creating an empty file.
-    return sqlite3.connect(f"file:{quote(os.fspath(path))}?mode=rw", uri=True, autocommit=True)
 
 
 def _execute(conn: sqlite3.Connection, statements: str | Iterable[str]) -> None:

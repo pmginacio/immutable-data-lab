@@ -4,7 +4,7 @@ Notes from a design discussion on 2026-11-13.
 The sections before "Current direction" are the discussion, and none of that is built.
 "Current direction" is where it ended up, and it was built: `inlay.migrate` and `inlay.rename`.
 It replaces the `migrations=[fn]` and `db.previous` parts above, and keeps the notes on renames and foreign keys.
-"Migrate on the db", at the end, is what is built now: it replaces `inlay.migrate` with `db.migrate`, and keeps `rename`.
+"Migrate on the db", at the end, is what is built now: `db.migrate` and `db.rename` replace `inlay.migrate` and `inlay.rename`.
 
 ## How it should feel
 
@@ -300,3 +300,14 @@ That was checked in a scratch script, along with the copy, a reference left poin
 - A warning when the table is already migrated: that is the normal case while the migration runs at every start, so the warning would be noise.
 
 A db that is behind by two migrations of the same table needs the older code first: the new class always takes the table's name, so only one migration per table can be in the code.
+
+### `rename` on the db
+
+`rename` moved onto the db too, as `db.rename("Order", Purchase)`: the old class's name, since that class is gone from the code, and the new class.
+It needs foreign keys on, which every connection of the db has, so it runs in the db's transaction and needs no connection or `path` of its own.
+With the new class it checks the renamed table against it, and does nothing when the old table is gone and the new one matches, so it can stay in startup code like a migration.
+`migrate` and then `rename` in one transaction change both shape and name, as case 2 did, but only once: afterwards there is no old table to migrate.
+
+A rename and the move aside in `migrate` both put a table's rows under another name, and they differ in what the references of other tables do.
+`ALTER TABLE RENAME` moves no rows and takes the references along; the copy moves the rows and leaves the references with the name.
+Each is what one of the two needs, so they stay two steps.

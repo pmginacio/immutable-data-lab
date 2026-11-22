@@ -371,8 +371,10 @@ If the table already matches `Order`, nothing happens, so the migration can run 
 
 The new class keeps the name of the table, and the key cannot change while other tables point to it.
 So there is at most one migration for each table in the code, and a db that is behind by two migrations of the same table needs the older code first.
-To rename a class, call `inlay.rename("Order", "Purchase")`: it renames the table, its indexes, and the references to it.
-Like `open`, it uses `.inlay.db` unless given another `path`.
+To rename a class, call `db.rename("Order", Purchase)` with the old name and the new class.
+It renames the table, its indexes, and the references to it, and then checks the table against `Purchase`.
+If the table of `Purchase` is already there and `order` is gone, nothing happens.
+`migrate` and then `rename` in one `db.transaction()` change both the shape and the name, all or nothing; that pair only runs once, since the second time there is no table `order` to migrate.
 A change that does not alter the schema is not a migration, just an ordinary write.
 
 ### History, an experiment
@@ -471,7 +473,7 @@ Only the `db` modules, `inlay.db`, `inlay.history.db` and `inlay.datoms.db`, tal
 | `functions` | functions such as `to_month` and aggregates such as `avg`, each with its Python and SQL |
 | `types` | Python types to SQLite types, and back |
 | `sql` | pure functions that build one SQL statement or clause each |
-| `db` | `open` and `rename`, the db with its `register` and `migrate`, record sets and views, and transactions |
+| `db` | `open`, the db with `register`, `migrate` and `rename`, record sets and views, and transactions |
 
 ## What it does not do
 

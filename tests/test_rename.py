@@ -37,6 +37,13 @@ def order_line(order_class: type) -> type:
     return OrderLine
 
 
+@entity(indexes=[("customer",)])
+class OrderLegacy:
+    id: str = key()
+    customer: Ref[Customer]
+    total: int
+
+
 OrderLine = order_line(Order)
 PurchaseLine = order_line(Purchase)
 
@@ -52,8 +59,13 @@ def path(tmp_path):
     return path
 
 
+def rename(path, old, new):
+    with inlay.open(path) as db:
+        db.rename(old, new)
+
+
 def test_rename_keeps_the_data_and_the_references_of_other_tables(path):
-    inlay.rename("Order", "Purchase", path=path)
+    rename(path, "Order", Purchase)
     # The first use checks the stored table of the lines against a class that refers to Purchase.
     with inlay.open(path) as db:
         (purchase,) = db[Purchase]
@@ -62,7 +74,7 @@ def test_rename_keeps_the_data_and_the_references_of_other_tables(path):
 
 
 def test_rename_renames_the_indexes_of_the_table(path):
-    inlay.rename("Order", "Purchase", path=path)
+    rename(path, "Order", Purchase)
     with sqlite3.connect(path) as conn:
         names = conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'purchase' AND sql IS NOT NULL"
@@ -70,20 +82,59 @@ def test_rename_renames_the_indexes_of_the_table(path):
         assert [name for (name,) in names] == ["purchase__customer"]
 
 
-def test_rename_is_not_idempotent(path):
-    inlay.rename("Order", "Purchase", path=path)
-    with pytest.raises(SchemaMismatch, match="no table 'order'"):
-        inlay.rename("Order", "Purchase", path=path)
+def test_running_it_again_does_nothing(path):
+    rename(path, "Order", Purchase)
+    rename(path, "Order", Purchase)
+    with inlay.open(path) as db:
+        assert len(db[Purchase]) == 1
+
+
+def test_a_missing_table_is_refused(tmp_path):
+    with pytest.raises(SchemaMismatch, match="no table 'order' to rename"):
+        rename(tmp_path / "empty.db", "Order", Purchase)
 
 
 def test_rename_onto_an_existing_table_fails_and_changes_nothing(path):
     with pytest.raises(SchemaMismatch, match="table 'customer' already exists"):
-        inlay.rename("Order", "Customer", path=path)
+        rename(path, "Order", Customer)
     with inlay.open(path) as db:
         assert len(db[Order]) == 1
 
 
-def test_rename_does_not_create_a_missing_file(tmp_path):
-    with pytest.raises(sqlite3.OperationalError):
-        inlay.rename("Order", "Purchase", path=tmp_path / "nope.db")
-    assert not (tmp_path / "nope.db").exists()
+def test_the_renamed_table_must_match_the_new_class(path):
+    @entity(indexes=[("customer",)])
+    class Purchase:
+        id: str = key()
+        customer: Ref[Customer]
+        total: int
+        discount: int
+
+    with pytest.raises(SchemaMismatch, match="'purchase' does not match"):
+        rename(path, "Order", Purchase)
+    with inlay.open(path) as db:
+        assert len(db[Order]) == 1
+
+
+def test_migrate_and_rename_in_one_transaction(path):
+    @entity(indexes=[("customer",)])
+    class Order:
+        id: str = key()
+        customer: Ref[Customer]
+        total: int
+        discount: int
+
+    @entity(indexes=[("customer",)])
+    class Purchase:
+        id: str = key()
+        customer: Ref[Customer]
+        total: int
+        discount: int
+
+    def add_discount(db):
+        db.add(*(Order(id=o.id, customer=o.customer, total=o.total, discount=0) for o in db[OrderLegacy]))
+
+    with inlay.open(path) as db, db.transaction():
+        db.migrate(add_discount, OrderLegacy, Order)
+        db.rename("Order", Purchase)
+    with inlay.open(path) as db:
+        assert [p.discount for p in db[Purchase]] == [0]
