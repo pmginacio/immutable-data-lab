@@ -238,6 +238,30 @@ The key cannot be optional, and other unions, such as `int | str`, are refused.
 Type checkers flag ordering comparisons on an optional field, such as `Order.discount > 1`, because `None > 1` is an error in Python.
 They also flag `= None` as the default of an optional reference, so it is passed explicitly.
 
+### Enums
+
+A field can be a `StrEnum` or an `IntEnum`. It is stored as its value and read back as a member:
+
+```python
+from enum import StrEnum
+
+class Status(StrEnum):
+    OPEN = "open"
+    PAID = "paid"
+
+@entity
+class Invoice:
+    id: str = key()
+    status: Status
+
+db[Invoice].filter(Invoice.status == Status.PAID)
+db[Invoice].aggregate_by(Invoice.status, len)  # {Status.OPEN: 3, Status.PAID: 12}
+```
+
+A stored value that is no longer a member raises when it is read, rather than coming back as text.
+Its column is the one of a `str` or an `int`, so a field that becomes an enum keeps its table, and a hashed key does not change.
+Other enums are refused, since their values can be of any type.
+
 ### Keys from the values
 
 `hashed()` instead of `key()` makes the key the SHA-256 of the other fields, so records with the same values have the same key.

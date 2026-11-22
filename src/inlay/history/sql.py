@@ -28,7 +28,7 @@ from inlay.nodes import (
     Value,
     describe,
 )
-from inlay.types import SQL_TYPES, to_sql
+from inlay.types import sql_type, to_sql
 
 CONNECTION_SETUP = ("PRAGMA foreign_keys = ON", "PRAGMA journal_mode = WAL")
 BEGIN = "BEGIN IMMEDIATE"
@@ -131,7 +131,7 @@ def drop_table_sql(table: str) -> str:
 
 
 def _column_def(f: FieldMeta) -> str:
-    return f"{_column(f)} {SQL_TYPES[f.py_type]} NOT NULL"
+    return f"{_column(f)} {sql_type(f.py_type)} NOT NULL"
 
 
 def _live_def(f: FieldMeta) -> str:
@@ -142,7 +142,7 @@ def _live_def(f: FieldMeta) -> str:
     """
     target = None if f.target is None else meta(f.target)
     return (
-        f"{quote(_live(f))} {SQL_TYPES[f.py_type]} GENERATED ALWAYS AS "
+        f"{quote(_live(f))} {sql_type(f.py_type)} GENERATED ALWAYS AS "
         f"(CASE WHEN {_IS_CURRENT} THEN {_column(f)} END) VIRTUAL "
         + (
             "UNIQUE"

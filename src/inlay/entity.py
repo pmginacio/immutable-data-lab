@@ -10,7 +10,7 @@ from typing import Any, dataclass_transform, get_args, get_origin, overload
 from inlay.conditions import Expr, own_value
 from inlay.meta import EntityMeta, FieldMeta, meta, table_name
 from inlay.nodes import BinOp, Call, GroupValue, Projection, RefValue, Value, result_type
-from inlay.types import SQL_TYPES, to_sql
+from inlay.types import sql_type, to_sql
 
 _KEY = "inlay_key"
 _HASHED = "inlay_hashed"
@@ -216,7 +216,7 @@ def _field_meta(owner: type, f: Field[Any], hint: Any) -> FieldMeta:
     is_key = bool(f.metadata.get(_KEY))
     ref, value = get_args(hint) if get_origin(hint) is Ref else (None, hint)
     value, optional = _without_none(value)
-    if value not in SQL_TYPES or (ref is not None and value is not str):
+    if sql_type(value) is None or (ref is not None and value is not str):
         raise TypeError(f"{owner.__name__}.{f.name} has unsupported type {hint!r}")
     return FieldMeta(owner, f.name, value, is_key, ref, optional)
 

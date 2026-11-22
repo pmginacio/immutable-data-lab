@@ -28,7 +28,7 @@ from inlay.nodes import (
     Table,
     Value,
 )
-from inlay.types import SQL_TYPES, to_sql
+from inlay.types import sql_type, to_sql
 
 CONNECTION_SETUP = ("PRAGMA foreign_keys = ON", "PRAGMA journal_mode = WAL")
 BEGIN = "BEGIN IMMEDIATE"
@@ -104,7 +104,7 @@ def copy_rows_sql(table: str, m: EntityMeta) -> str:
 
 
 def _column_def(f: FieldMeta, table: str) -> str:
-    sql = f"{_column(f)} {SQL_TYPES[f.py_type]}" + ("" if f.optional else " NOT NULL")
+    sql = f"{_column(f)} {sql_type(f.py_type)}" + ("" if f.optional else " NOT NULL")
     if f.is_key:
         sql += " PRIMARY KEY"
     if f.target is not None:
