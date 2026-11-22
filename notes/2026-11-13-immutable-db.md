@@ -30,7 +30,7 @@ It keeps one table of versions per class.
 The first version supports no change that touches history.
 
 - Adding a new class is allowed: it is a new table, and the past does not change.
-- Any change to an existing class is refused: `open` raises `SchemaMismatch`, as today.
+- Any change to an existing class is refused: its first use raises `SchemaMismatch`, as in inlay.
 - There is no `migrate`.
   `rename` does not change history, but it is left out to keep the first version small.
 
@@ -127,7 +127,8 @@ It returns a `Snapshot`: an immutable value pinned to one transaction, with the 
 Writing to the past is not possible, and pyright reports it, because a snapshot's type has no write methods.
 
 ```python
-with inlay.history.open([Customer, Order]) as db:
+with inlay.history.open() as db:
+    db.register(Customer, Order)
     db.add(ana, order, other_order)
     with db.transaction():
         db.update(replace(order, total=0))

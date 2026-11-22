@@ -41,7 +41,7 @@ Each operation takes the name and the behaviour of the dict or set operation it 
   - Each `Ref` target must be registered already, be the class itself, or be in the same call, or it raises and names the missing target.
     Classes that point to each other in a loop are registered in one call, so there is always an order that works.
   - It does not register the targets of `Ref`s by itself, so it never creates a table that was not named.
-- `Cls in db` is true if the table of `Cls` exists, even if it differs from the class; it never raises.
+- `Cls in db` is true if the table of `Cls` exists, even if it differs from the class; it raises only for a class that is not an entity.
 - `db[Cls]`, and every write of a class, raise `KeyError` if the class has no table, as a dict does for a missing key and SQL does for a missing table.
   A filter through a `Ref` to a class with no table raises the same way.
   Writing does not create a table: on a plain dict, `d[k].add(x)` raises for a missing key, and only a `defaultdict` creates it.
@@ -54,7 +54,7 @@ Each operation takes the name and the behaviour of the dict or set operation it 
 - `del db[Cls]` drops the table and its indexes, and raises `BrokenRef` while another table points to it.
   In the history db it drops the history of the class too.
 - The first use of a class also creates the indexes it declares that its table lacks, and drops the ones inlay made, named after the table, that it no longer declares, so indexes follow the class with no `migrate`.
-- `migrate(fn, old, new, path=...)` loses `other_entities`.
+- `migrate(fn, old, new, path=...)` loses `other_entities`; it later became `db.migrate`, see "Migrate on the db" in `2026-11-13-migrations.md`.
   The db it passes to `fn` checks nothing on first use, since the tables change shape until the end, and checks the classes `fn` used once the old table is gone.
   `Db` takes its first-use check as a parameter for that.
 - In the history db, `register` and `del db[Cls]` take a transaction number like any other transaction.

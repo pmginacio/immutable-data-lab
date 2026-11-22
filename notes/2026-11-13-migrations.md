@@ -2,8 +2,9 @@
 
 Notes from a design discussion on 2026-11-13.
 The sections before "Current direction" are the discussion, and none of that is built.
-"Current direction" is where it ended up, and it is built: `inlay.migrate` and `inlay.rename`.
+"Current direction" is where it ended up, and it was built: `inlay.migrate` and `inlay.rename`.
 It replaces the `migrations=[fn]` and `db.previous` parts above, and keeps the notes on renames and foreign keys.
+"Migrate on the db", at the end, is what is built now: it replaces `inlay.migrate` with `db.migrate`, and keeps `rename`.
 
 ## How it should feel
 
@@ -255,3 +256,47 @@ If a class were set up the first time `db[T]` uses it, as in the follow-up on no
 ### Open questions
 
 - Is `del db[Cls]` still needed to drop a table, now that `migrate` always drops the old one?
+
+## Migrate on the db
+
+From a discussion on 2026-11-21, after `register` and `del` became methods of the db and work inside transactions.
+
+```python
+with inlay.open() as db:
+    db.migrate(upgrade, OrderLegacy, Order)
+```
+
+`migrate` changes the shape of one table and keeps its name; `rename` changes names.
+The new class must take the stored table's name, so case 2 above is refused with a message that points to `rename`.
+
+### What it does
+
+All in one transaction of the db, or a savepoint inside an open one:
+
+1. If the table already matches the new class, return.
+2. Raise `SchemaMismatch` unless the table matches the old class.
+3. Raise `SchemaMismatch` if the key changes, by name or type, while other tables point to the table.
+4. `register` the old class, copy the rows into its table with `INSERT ... SELECT`, and drop the stored table.
+5. `register` the new class, call `upgrade(db)`, and `del` the old class.
+
+The other tables say `REFERENCES "order"` by name, so once the new table exists they point to it, and nothing is rebuilt.
+inlay's references are `DEFERRABLE INITIALLY DEFERRED`, so dropping the stored table and filling the new one are checked at commit.
+Every class `upgrade` uses is checked on its first use, as on any db, so no check at the end is needed.
+
+### Why
+
+The standalone `migrate` had its own connection with foreign keys off, a db that checked no class while tables were reshaped, a check at the end of the classes used, and the rebuild of the referring tables.
+The rebuild is needed only for case 2 and for key changes, which both change other tables too.
+Dropping those cases removes all of that.
+
+The copy is the price: renaming the stored table aside would rewrite the references in the other tables, because foreign keys cannot be turned off inside a transaction, and `legacy_alter_table` does not stop the rewrite while they are on.
+That was checked in a scratch script, along with the copy, a reference left pointing nowhere failing at commit, and `rename` after `migrate` updating the references.
+
+### Considered and left out
+
+- No old class, with `upgrade` reading the old rows as dicts: nothing to write or delete, but the values come as stored (dates as text, booleans as 0 and 1), and nothing checks that the stored shape is the expected one.
+- A version in every table name, such as `v2__order`, with `upgrade(db_v1, db_v2)`: it allows key changes and several tables at once, but every migration touches every table and the names change each time.
+- Migrating into a new file: plain names and no SQLite tricks, but it copies everything and needs every other process to close the file.
+- A warning when the table is already migrated: that is the normal case while the migration runs at every start, so the warning would be noise.
+
+A db that is behind by two migrations of the same table needs the older code first: the new class always takes the table's name, so only one migration per table can be in the code.

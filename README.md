@@ -296,8 +296,8 @@ A small shop app that uses all of this, with comments that point at each feature
 ### Changing a class
 
 There are no migration files.
-A migration is a Python function that takes the db, and `migrate` runs it in one transaction: either all of it happens or none of it does.
-It changes the schema of one class.
+A migration is a Python function that takes the db, and `db.migrate` runs it in one transaction: either all of it happens or none of it does.
+It changes the shape of one table.
 Here is a change that needs real computation: every order gets a `total_amount`, the sum of price times quantity over its line items.
 The code is shown before the change, while the migration exists, and after it.
 
@@ -341,7 +341,8 @@ def add_total_amount(db: Db) -> None:
         lines = db[LineItem].filter(LineItem.order == old.id)
         db.add(Order(id=old.id, customer=old.customer, total_amount=lines.sum(LineItem.price * LineItem.qty)))
 
-inlay.migrate(add_total_amount, OrderLegacy, Order)    # runs once, and does nothing after that
+with inlay.open() as db:
+    db.migrate(add_total_amount, OrderLegacy, Order)    # runs once, and does nothing after that
 # ---- end of migration ----
 
 with inlay.open() as db:
@@ -361,15 +362,16 @@ with inlay.open() as db:    # the table "order" has the columns id, customer, to
     ...
 ```
 
-`migrate` sees that the table `order` still holds the old shape, moves it aside, creates the new table, and runs the function, which can read and write any records.
-Then it points the foreign keys of the other tables to the new table, drops the old one, and checks that the classes match their tables and that every reference points to a record.
-If the db already has the new table, nothing happens, so running it again is safe.
-The file must exist and hold the old table; otherwise `migrate` raises.
-Like `open`, `migrate` and `rename` use `.inlay.db` unless given another `path`.
+`migrate` checks that the table `order` holds the shape of `OrderLegacy`, and copies it aside to the table `order_legacy`.
+Then it creates the new table `order` and runs the function, which reads the old records and can read and write any records.
+At the end it drops `order_legacy`, and the commit checks that every reference points to a record.
+The other tables point to the table by name, so `LineItem` points to the new orders without changing.
+If the table already matches `Order`, nothing happens, so the migration can run every time the app starts until it is deleted.
 
-The new class can also have a name of its own: `inlay.migrate(fn, Order, Purchase)` moves the data to a new table `purchase`, and the foreign keys of the other tables follow.
-The function gets a db in which the old class, the new class, and the classes with tables can be used; they are checked against their tables at the end.
-To only rename a class, with no change to its fields, call `inlay.rename("Order", "Purchase")`: it renames the table, its indexes, and the references to it.
+The new class keeps the name of the table, and the key cannot change while other tables point to it.
+So there is at most one migration for each table in the code, and a db that is behind by two migrations of the same table needs the older code first.
+To rename a class, call `inlay.rename("Order", "Purchase")`: it renames the table, its indexes, and the references to it.
+Like `open`, it uses `.inlay.db` unless given another `path`.
 A change that does not alter the schema is not a migration, just an ordinary write.
 
 ### History, an experiment
@@ -393,13 +395,15 @@ with inlay.history.open() as db:                     # the file is .inlay-histor
 An update or a removal ends the current version of a record and keeps it.
 SQLite still checks keys and references, so a current order must refer to a current customer.
 One difference from the db above: the same key twice in one `update` raises `AlreadyExists`, where inlay keeps the last record.
-A class cannot be changed yet, so there is no `migrate` or `rename`, and optional fields are refused.
+A class cannot be changed yet, so there is no `migrate` or `rename`.
+Optional fields are refused, and so are values read through a `Ref`, such as sorting by `Order.customer.name`.
 The design and its limits are in [`notes/2026-11-13-immutable-db.md`](notes/2026-11-13-immutable-db.md).
 
 `inlay.datoms` is a second experiment with `as_of`, paused for now: it stores each field of a record as a datom, a row of one table shared by all classes, instead of one row per version.
 The library checks keys and references itself, since that table has no constraints, and an update stores only the fields that change.
 Reads of the present use a table of the current values, and a snapshot fills a temporary one on its first read.
-It still takes its classes in `open`, as in `inlay.datoms.open([Customer, Order])`, since it has no table for each class to register, and it refuses optional fields.
+It still takes its classes in `open`, as in `inlay.datoms.open([Customer, Order])`, since it has no table for each class to register.
+Like `inlay.history`, it refuses optional fields and values read through a `Ref`.
 
 ## Design
 
@@ -466,7 +470,7 @@ Only the `db` modules, `inlay.db`, `inlay.history.db` and `inlay.datoms.db`, tal
 | `functions` | functions such as `to_month` and aggregates such as `avg`, each with its Python and SQL |
 | `types` | Python types to SQLite types, and back |
 | `sql` | pure functions that build one SQL statement or clause each |
-| `db` | `open`, `migrate` and `rename`, the db, record sets and views, and transactions |
+| `db` | `open` and `rename`, the db with its `register` and `migrate`, record sets and views, and transactions |
 
 ## What it does not do
 
@@ -474,7 +478,6 @@ This is version one, and the limits are on purpose.
 
 - SQLite only.
 - A `Db` works only in the thread and process that opened it: open one in each.
-- Several processes creating the same new db file at once can fail: create it once first.
 - No enums or composite keys.
 - No cascading deletes or reverse relations.
 - Few functions so far: arithmetic, `to_month` and `to_day`.
