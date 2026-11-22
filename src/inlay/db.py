@@ -231,7 +231,8 @@ class Db:
 
     def __getitem__[T](self, cls: type[T]) -> RecordSet[T]:
         """The records of `cls`. Raises `KeyError` if it has no table, and `SchemaMismatch` if its table differs."""
-        return RecordSet(self._conn, self._open_iterations, Table(self._checked(cls).cls), _transaction=self.transaction)
+        self._ready(cls)
+        return RecordSet(self._conn, self._open_iterations, Table(cls), _transaction=self.transaction)
 
     def __contains__(self, cls: type) -> bool:
         """Whether `cls` has a table, even one that differs from it."""
@@ -260,8 +261,7 @@ class Db:
             tables = self._tables()
             if stored := [m.cls.__name__ for m in new.values() if m.table in tables]:
                 raise SchemaMismatch(f"a table is already in this db for {', '.join(stored)}")
-            for target in targets:
-                self._checked(target)  # raises if it has no table, or one that differs from it
+            self._ready(*targets)  # raises if one has no table, or one that differs from it
             _execute(self._conn, (create_table_sql(m) for m in new.values()))
             _execute(self._conn, (sql for m in new.values() for sql in indexes_sql(m).values()))
             self._known.update(new)
@@ -322,7 +322,7 @@ class Db:
                     _execute(self._conn, reprefix_index_sql(name, sql, old_table, m.table))
             # Classes found matching the old table, or reaching it through a `Ref`, no longer do.
             self._known.clear()
-            self._checked(new)
+            self._ready(new)
 
     def transaction(self) -> AbstractContextManager[None]:
         return _transaction(self._conn, self._known)
@@ -350,10 +350,21 @@ class Db:
     ) -> None:
         self.close()
 
-    def _checked(self, cls: type) -> EntityMeta:
-        if cls not in self._known:
-            self._known.update(_check_in_file(self._conn, cls))
-        return meta(cls)
+    def _ready(self, *classes: type) -> None:
+        """On first use, checks the tables of `classes` and of the classes their `Ref`s reach, and fixes their indexes.
+
+        It creates the declared indexes that are missing, and drops the ones inlay made that are no longer declared.
+        """
+        metas = {m.cls: m for c in classes if c not in self._known for m in reachable(c)}
+        if not metas:
+            return
+        tables = self._tables()
+        if missing := [m.cls.__name__ for m in metas.values() if m.table not in tables]:
+            raise KeyError(f"no table in this db for {', '.join(missing)}; register it first")
+        _check_tables(metas.values(), tables)
+        for m in metas.values():
+            _sync_indexes(self._conn, m)
+        self._known.update(metas)
 
     def _tables(self) -> dict[str, str]:
         return dict(self._conn.execute(LIST_TABLES))
@@ -366,26 +377,11 @@ class Db:
         """Runs `write` on the records of each class, all in one transaction."""
         groups = _grouped(objs)
         _raise_if_iterating(self._open_iterations, groups)
-        # Checked before the transaction, so a failed write does not undo the indexes a first check creates.
-        metas = [self._checked(cls) for cls in groups]
+        # Before the transaction, so a failed write does not undo the indexes a first use creates.
+        self._ready(*groups)
         with self.transaction():
-            for m, group in zip(metas, groups.values(), strict=True):
-                write(self._conn, m, group)
-
-
-def _check_in_file(conn: sqlite3.Connection, cls: type) -> list[type]:
-    """Checks the tables of `cls` and of the classes its `Ref`s reach against them, and returns those classes.
-
-    It also creates the declared indexes that are missing and drops the ones no longer declared.
-    """
-    metas = reachable(cls)
-    tables = dict(conn.execute(LIST_TABLES))
-    if missing := [m.cls.__name__ for m in metas if m.table not in tables]:
-        raise KeyError(f"no table in this db for {', '.join(missing)}; register it first")
-    _check_tables(metas, tables)
-    for m in metas:
-        _sync_indexes(conn, m)
-    return [m.cls for m in metas]
+            for cls, group in groups.items():
+                write(self._conn, meta(cls), group)
 
 
 # Writes the records of one class. It runs inside the transaction, so raising undoes the whole call.
