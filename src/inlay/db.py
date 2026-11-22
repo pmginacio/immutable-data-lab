@@ -254,19 +254,17 @@ class Db:
 
         Each class its `Ref`s point to must have a table already, or be one of `classes`.
         """
-        metas = list(entity_metas(classes).values())  # raises if two of them use the same table
+        new = entity_metas(classes)  # raises if two of them use the same table
+        targets = {f.target for m in new.values() for f in m.fields if f.target is not None} - new.keys()
         with self.transaction():
             tables = self._tables()
-            if stored := [m.cls.__name__ for m in metas if m.table in tables]:
+            if stored := [m.cls.__name__ for m in new.values() if m.table in tables]:
                 raise SchemaMismatch(f"a table is already in this db for {', '.join(stored)}")
-            targets = {f.target for m in metas for f in m.fields if f.target is not None} - set(classes)
-            if missing := [t.__name__ for t in targets if meta(t).table not in tables]:
-                raise TypeError(f"{', '.join(missing)} must be registered first, or in the same call")
             for target in targets:
-                self._checked(target)
-            _execute(self._conn, (create_table_sql(m) for m in metas))
-            _execute(self._conn, (sql for m in metas for sql in indexes_sql(m).values()))
-            self._known.update(classes)
+                self._checked(target)  # raises if it has no table, or one that differs from it
+            _execute(self._conn, (create_table_sql(m) for m in new.values()))
+            _execute(self._conn, (sql for m in new.values() for sql in indexes_sql(m).values()))
+            self._known.update(new)
 
     def migrate(self, fn: Callable[[Db], None], old: type, new: type) -> None:
         """Change the shape of the table of `new` and convert its records with `fn`, all or nothing.

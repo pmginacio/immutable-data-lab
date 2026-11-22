@@ -97,7 +97,7 @@ def test_register_raises_for_a_class_with_a_table(open_db, path):
 
 def test_register_needs_the_targets_of_refs_first_or_in_the_same_call(open_db, path):
     with open_db(path) as db:
-        with pytest.raises(TypeError, match="Customer must be registered first"):
+        with pytest.raises(KeyError, match="no table in this db for Customer; register it first"):
             db.register(Order)
         assert Order not in db
         db.register(Customer)
