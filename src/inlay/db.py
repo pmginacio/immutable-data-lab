@@ -127,7 +127,10 @@ class RecordView[T]:
         return self._view(Filter(self._query, cond))
 
     def sorted(self, *, key: Any, reverse: bool = False) -> "RecordView[T]":
-        """`key` is a value such as `Order.total` or `Order.total * 2`, or a tuple of values."""
+        """`key` is a value such as `Order.total`, `Order.total * 2` or `Order.customer.name`, or a tuple of values.
+
+        A value read through an empty `Ref` is None, which sorts first.
+        """
         keys = key if isinstance(key, tuple) else (key,)
         return self._view(Sort(self._query, tuple(own_value(self._meta.cls, k) for k in keys), reverse))
 

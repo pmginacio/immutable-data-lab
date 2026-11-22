@@ -314,6 +314,7 @@ def main() -> None:
                 print(f"  {order.placed:%d %b %H:%M}  {order.status:<9} {money(order.total):>8}  {paid}")
 
             print(f"\nStock worth {money(stock_value(db))}")
+            print("\nLow stock")
             for product in low_stock(db, at_most=2):
                 print(f"  {product.name:<8} {product.stock} left")
 

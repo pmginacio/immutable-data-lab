@@ -12,7 +12,7 @@ class FieldMeta:
     is_key: bool = False
     # What a `Ref` field points to, as written; a forward reference until that class exists.
     ref: type | ForwardRef | None = None
-    optional: bool = False  # typed `X | None`, so its value can be None
+    optional: bool = False
 
     @property
     def target(self) -> type | None:

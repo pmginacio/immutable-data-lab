@@ -135,8 +135,8 @@ def one_of[T](field: T, values: Iterable[T]) -> Condition:
 
 def own_value(cls: type, value: object) -> Value:
     """The value `value` stands for on a record of `cls`: computed from its fields, or read through its `Ref`s."""
-    refs, v = _parts(value)
-    own = RefValue(refs, v) if refs else v
+    relations, v = _parts(value)
+    own = RefValue(relations, v) if relations else v
     for field in value_fields(own):
         if field.owner is not cls:
             raise ValueError(f"{field.owner.__name__}.{field.name} is not a field of {cls.__name__}")
