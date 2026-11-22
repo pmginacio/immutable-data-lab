@@ -8,7 +8,6 @@ from inlay.db import (
     RecordView,
     SchemaMismatch,
     StoreError,
-    migrate,
     open,
     rename,
 )
@@ -36,7 +35,6 @@ __all__ = [
     "entity",
     "is_none",
     "key",
-    "migrate",
     "negate",
     "none_of",
     "one_of",

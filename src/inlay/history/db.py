@@ -69,7 +69,7 @@ class RecordView[T]:
     """
 
     _conn: sqlite3.Connection
-    _reading: Counter[type]
+    _open_iterations: Counter[type]
     _query: Query
     _tx: int | None = None
 
@@ -81,12 +81,12 @@ class RecordView[T]:
         sql, params = select_sql(self._query, self._tx)
         classes = classes_read(self._query)
         # SQLite does not say what an open SELECT returns once its tables change, so writes to them are refused.
-        self._reading.update(classes)
+        self._open_iterations.update(classes)
         try:
             for row in self._conn.execute(sql, params):
                 yield _from_row(self._meta, row)
         finally:
-            self._reading.subtract(classes)
+            self._open_iterations.subtract(classes)
 
     def __len__(self) -> int:
         return self._aggregate(aggregate_of(len))
@@ -181,7 +181,7 @@ class RecordView[T]:
         return default
 
     def _view(self, query: Query) -> "RecordView[T]":
-        return RecordView(self._conn, self._reading, query, self._tx)
+        return RecordView(self._conn, self._open_iterations, query, self._tx)
 
     def _aggregate(self, aggregate: Aggregate[Any], value: Value | None = None) -> Any:
         sql, params = aggregate_sql(self._query, self._tx, aggregate, value)
@@ -195,7 +195,7 @@ class RecordSet[T](RecordView[T]):
     _known: set[type] = field(kw_only=True)  # the db's, which a rollback empties
 
     def delete(self, *keys: str) -> None:
-        _check_idle(self._reading, [self._meta.cls])
+        _raise_if_iterating(self._open_iterations, [self._meta.cls])
         with _transaction(self._conn, self._known):
             deleted = self._conn.executemany(delete_by_key_sql(self._meta), ((to_sql(k),) for k in keys)).rowcount
             if deleted != len(keys):
@@ -205,7 +205,7 @@ class RecordSet[T](RecordView[T]):
         cond = all_of(*conds)
         check_condition(self._meta.cls, cond)
         sql, params = clear_sql(self._meta, cond)
-        _check_idle(self._reading, [self._meta.cls])
+        _raise_if_iterating(self._open_iterations, [self._meta.cls])
         with _transaction(self._conn, self._known):
             self._conn.execute(sql, params)
 
@@ -215,25 +215,25 @@ class Snapshot:
     """The db as it was at transaction `tx`: the same reads as the db, and no writes."""
 
     _conn: sqlite3.Connection
-    _reading: Counter[type]  # shared with the db, which writes on the same connection
+    _open_iterations: Counter[type]  # shared with the db, which writes on the same connection
     _checked: Callable[[type], EntityMeta]  # the db's check that a class has a matching table
     tx: int
 
     def __getitem__[T](self, cls: type[T]) -> RecordView[T]:
-        return RecordView(self._conn, self._reading, Table(self._checked(cls).cls), self.tx)
+        return RecordView(self._conn, self._open_iterations, Table(self._checked(cls).cls), self.tx)
 
 
 class Db:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
-        self._reading: Counter[type] = Counter()
+        self._open_iterations: Counter[type] = Counter()
         # The classes whose tables this db has found in the file, matching them. Any rollback empties it,
         # since it may have undone a `register` or a `del`, and the next use of each class looks again.
         self._known: set[type] = set()
 
     def __getitem__[T](self, cls: type[T]) -> RecordSet[T]:
         """The records of `cls`. Raises `KeyError` if it has no table, and `SchemaMismatch` if its table differs."""
-        return RecordSet(self._conn, self._reading, Table(self._checked(cls).cls), _known=self._known)
+        return RecordSet(self._conn, self._open_iterations, Table(self._checked(cls).cls), _known=self._known)
 
     def __contains__(self, cls: type) -> bool:
         """Whether `cls` has a table, even one that differs from it."""
@@ -242,7 +242,7 @@ class Db:
     def __delitem__(self, cls: type) -> None:
         """Drops the table of `cls`, with its whole history. Raises `BrokenRef` while another table points to it."""
         m = meta(cls)
-        _check_idle(self._reading, [cls])
+        _raise_if_iterating(self._open_iterations, [cls])
         with _transaction(self._conn, self._known):
             if m.table not in self._tables():
                 raise KeyError(f"no table in this db for {cls.__name__}")
@@ -297,7 +297,7 @@ class Db:
             if not 0 <= at <= latest:
                 raise ValueError(f"there is no committed transaction {at}; the latest is {latest}")
             tx = at
-        return Snapshot(self._conn, self._reading, self._checked, tx)
+        return Snapshot(self._conn, self._open_iterations, self._checked, tx)
 
     def transaction(self) -> AbstractContextManager[None]:
         return _transaction(self._conn, self._known)
@@ -351,7 +351,7 @@ class Db:
     def _apply_by_entity(self, objs: Sequence[object], *writes: _Write) -> None:
         """Runs `writes`, in order, on the records of each class, all in one transaction."""
         groups = _grouped(objs)
-        _check_idle(self._reading, groups)
+        _raise_if_iterating(self._open_iterations, groups)
         with _transaction(self._conn, self._known):
             for cls, group in groups.items():
                 m = self._checked(cls)
@@ -390,10 +390,10 @@ def _grouped(objs: Iterable[object]) -> dict[type, list[object]]:
     return groups
 
 
-def _check_idle(reading: Counter[type], classes: Iterable[type]) -> None:
+def _raise_if_iterating(open_iterations: Counter[type], classes: Iterable[type]) -> None:
     """Raise if an iteration that is still open reads the table of one of `classes`."""
     for cls in classes:
-        if reading[cls] > 0:
+        if open_iterations[cls] > 0:
             raise RuntimeError(f"{cls.__name__} changed during iteration")
 
 

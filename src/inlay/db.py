@@ -31,10 +31,8 @@ from inlay.sql import (
     BEGIN,
     COMMIT,
     CONNECTION_SETUP,
-    FOREIGN_KEY_CHECK,
     LIST_INDEXES,
     LIST_TABLES,
-    MIGRATION_SETUP,
     REFERRERS,
     RELEASE,
     ROLLBACK,
@@ -42,7 +40,7 @@ from inlay.sql import (
     SAVEPOINT,
     aggregate_sql,
     clear_sql,
-    create_index_sql,
+    copy_rows_sql,
     create_table_sql,
     delete_by_key_sql,
     delete_equal_sql,
@@ -51,7 +49,6 @@ from inlay.sql import (
     indexes_sql,
     insert_sql,
     rename_table_sql,
-    repoint_sql,
     reprefix_index_sql,
     select_sql,
     upsert_sql,
@@ -87,7 +84,7 @@ class RecordView[T]:
     """A lazy, read-only collection of records. Every read runs its query again."""
 
     _conn: sqlite3.Connection
-    _reading: Counter[type]
+    _open_iterations: Counter[type]
     _query: Query
 
     @property
@@ -98,12 +95,12 @@ class RecordView[T]:
         sql, params = select_sql(self._query)
         classes = classes_read(self._query)
         # SQLite does not say what an open SELECT returns once its tables change, so writes to them are refused.
-        self._reading.update(classes)
+        self._open_iterations.update(classes)
         try:
             for row in self._conn.execute(sql, params):
                 yield _from_row(self._meta, row)
         finally:
-            self._reading.subtract(classes)
+            self._open_iterations.subtract(classes)
 
     def __len__(self) -> int:
         return self._aggregate(aggregate_of(len))
@@ -198,7 +195,7 @@ class RecordView[T]:
         return default
 
     def _view(self, query: Query) -> "RecordView[T]":
-        return RecordView(self._conn, self._reading, query)
+        return RecordView(self._conn, self._open_iterations, query)
 
     def _aggregate(self, aggregate: Aggregate[Any], value: Value | None = None) -> Any:
         sql, params = aggregate_sql(self._query, aggregate, value)
@@ -212,7 +209,7 @@ class RecordSet[T](RecordView[T]):
     _known: set[type] = field(kw_only=True)  # the db's, which a rollback empties
 
     def delete(self, *keys: str) -> None:
-        _check_idle(self._reading, [self._meta.cls])
+        _raise_if_iterating(self._open_iterations, [self._meta.cls])
         with _transaction(self._conn, self._known):
             deleted = self._conn.executemany(delete_by_key_sql(self._meta), ((k,) for k in keys)).rowcount
             if deleted != len(keys):
@@ -222,23 +219,22 @@ class RecordSet[T](RecordView[T]):
         cond = all_of(*conds)
         check_condition(self._meta.cls, cond)
         sql, params = clear_sql(self._meta, cond)
-        _check_idle(self._reading, [self._meta.cls])
+        _raise_if_iterating(self._open_iterations, [self._meta.cls])
         with _transaction(self._conn, self._known):
             self._conn.execute(sql, params)
 
 
 class Db:
-    def __init__(self, conn: sqlite3.Connection, check: _Check | None = None) -> None:
+    def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
-        self._reading: Counter[type] = Counter()
+        self._open_iterations: Counter[type] = Counter()
         # The classes whose tables this db has found in the file, matching them. Any rollback empties it,
         # since it may have undone a `register` or a `del`, and the next use of each class looks again.
         self._known: set[type] = set()
-        self._check = check or _check_in_file
 
     def __getitem__[T](self, cls: type[T]) -> RecordSet[T]:
         """The records of `cls`. Raises `KeyError` if it has no table, and `SchemaMismatch` if its table differs."""
-        return RecordSet(self._conn, self._reading, Table(self._checked(cls).cls), _known=self._known)
+        return RecordSet(self._conn, self._open_iterations, Table(self._checked(cls).cls), _known=self._known)
 
     def __contains__(self, cls: type) -> bool:
         """Whether `cls` has a table, even one that differs from it."""
@@ -247,12 +243,11 @@ class Db:
     def __delitem__(self, cls: type) -> None:
         """Drops the table of `cls` and its records. Raises `BrokenRef` while another table points to it."""
         m = meta(cls)
-        _check_idle(self._reading, [cls])
+        _raise_if_iterating(self._open_iterations, [cls])
         with _transaction(self._conn, self._known):
             if m.table not in self._tables():
                 raise KeyError(f"no table in this db for {cls.__name__}")
-            referrers = [t for (t,) in self._conn.execute(REFERRERS, (m.table,)) if t != m.table]
-            if referrers:
+            if referrers := self._referrers(m.table):
                 raise BrokenRef(f"{cls.__name__} cannot be deleted while tables {referrers} point to it")
             self._conn.execute(drop_table_sql(m.table))
             self._known.discard(cls)
@@ -277,6 +272,40 @@ class Db:
             _execute(self._conn, (create_table_sql(m) for m in metas))
             _execute(self._conn, (sql for m in metas for sql in indexes_sql(m).values()))
             self._known.update(classes)
+
+    def migrate(self, fn: Callable[[Db], None], old: type, new: type) -> None:
+        """Change the shape of the table of `new` and convert its records with `fn`, all or nothing.
+
+        `old` describes the table as it is stored, under another name, so `fn` can read its records.
+        Nothing happens if the table already matches `new`. `rename` changes the name of a table.
+        """
+        old_meta, new_meta = meta(old), meta(new)
+        if old_meta.table == new_meta.table:
+            raise ValueError(f"{old.__name__} and {new.__name__} use the same table; give the old class another name")
+        with _transaction(self._conn, self._known):
+            stored = self._tables().get(new_meta.table)
+            if stored == create_table_sql(new_meta):
+                return
+            if stored != create_table_sql(old_meta, new_meta.table):
+                raise SchemaMismatch(
+                    f"cannot migrate {old.__name__} to {new.__name__}: the db needs a table {new_meta.table!r} "
+                    f"that matches {old.__name__}; a migration keeps the name of the table, and rename changes it"
+                )
+            key_changes = (old_meta.key.name, old_meta.key.py_type) != (new_meta.key.name, new_meta.key.py_type)
+            if key_changes and (referrers := self._referrers(new_meta.table)):
+                raise SchemaMismatch(
+                    f"cannot migrate {old.__name__} to {new.__name__}: "
+                    f"the key changes, and tables {referrers} point to it"
+                )
+            # The references of other tables name the table, so they lead to the new records once the old ones move.
+            self.register(old)
+            self._conn.execute(copy_rows_sql(new_meta.table, old_meta))
+            self._conn.execute(drop_table_sql(new_meta.table))
+            # Classes found matching the stored table, or reaching it through a `Ref`, no longer do.
+            self._known.clear()
+            self.register(new)
+            fn(self)
+            del self[old]
 
     def transaction(self) -> AbstractContextManager[None]:
         return _transaction(self._conn, self._known)
@@ -306,23 +335,23 @@ class Db:
 
     def _checked(self, cls: type) -> EntityMeta:
         if cls not in self._known:
-            self._known.update(self._check(self._conn, cls))
+            self._known.update(_check_in_file(self._conn, cls))
         return meta(cls)
 
     def _tables(self) -> dict[str, str]:
         return dict(self._conn.execute(LIST_TABLES))
 
+    def _referrers(self, table: str) -> list[str]:
+        """The other tables with a foreign key to `table`."""
+        return [t for (t,) in self._conn.execute(REFERRERS, (table,)) if t != table]
+
     def _apply_by_entity(self, objs: Sequence[object], write: _Write) -> None:
         """Runs `write` on the records of each class, all in one transaction."""
         groups = _grouped(objs)
-        _check_idle(self._reading, groups)
+        _raise_if_iterating(self._open_iterations, groups)
         with _transaction(self._conn, self._known):
             for cls, group in groups.items():
                 write(self._conn, self._checked(cls), group)
-
-
-# Checks a class the db has not used yet, and returns the classes it found matching their tables, the class included.
-type _Check = Callable[[sqlite3.Connection, type], list[type]]
 
 
 def _check_in_file(conn: sqlite3.Connection, cls: type) -> list[type]:
@@ -338,11 +367,6 @@ def _check_in_file(conn: sqlite3.Connection, cls: type) -> list[type]:
     for m in metas:
         _sync_indexes(conn, m)
     return [m.cls for m in metas]
-
-
-def _trust(conn: sqlite3.Connection, cls: type) -> list[type]:
-    """Checks nothing: during `migrate` the tables change shape until the end, where the classes used are checked."""
-    return [cls]
 
 
 # Writes the records of one class. It runs inside the transaction, so raising undoes the whole call.
@@ -375,10 +399,10 @@ def _grouped(objs: Iterable[object]) -> dict[type, list[object]]:
     return groups
 
 
-def _check_idle(reading: Counter[type], classes: Iterable[type]) -> None:
+def _raise_if_iterating(open_iterations: Counter[type], classes: Iterable[type]) -> None:
     """Raise if an iteration that is still open reads the table of one of `classes`."""
     for cls in classes:
-        if reading[cls] > 0:
+        if open_iterations[cls] > 0:
             raise RuntimeError(f"{cls.__name__} changed during iteration")
 
 
@@ -467,72 +491,6 @@ def rename(old: str, new: str, *, path: str | os.PathLike[str] = DEFAULT_PATH) -
         conn.execute(COMMIT)
     finally:
         conn.close()  # also rolls back what was not committed
-
-
-def migrate(
-    fn: Callable[[Db], None],
-    old: type,
-    new: type,
-    *,
-    path: str | os.PathLike[str] = DEFAULT_PATH,
-) -> None:
-    """Change the schema of one class and convert its records with `fn`, all or nothing.
-
-    `old` describes the table as it is stored and `new` the table it becomes; the old table is dropped at the end.
-    Either `new` takes the table name of the stored table (it is moved aside to the table name of `old`),
-    or `new` has a table name of its own. `fn` gets a db in which `old`, `new` and the classes with tables can be used.
-    Nothing happens if the db already has the table of `new`.
-    """
-    old_meta, new_meta = meta(old), meta(new)
-    if old_meta.table == new_meta.table:
-        raise ValueError(f"{old.__name__} and {new.__name__} use the same table; give the old class another name")
-    conn = _connect(path, create=False)
-    try:
-        _execute(conn, (*MIGRATION_SETUP, BEGIN))
-        tables = dict(conn.execute(LIST_TABLES))
-        stored = tables.get(new_meta.table)
-        if stored == create_table_sql(new_meta):
-            return
-        if stored == create_table_sql(old_meta, new_meta.table):
-            # The stored text keeps its references to itself under the new table's name, so it is not checked again.
-            conn.execute(rename_table_sql(new_meta.table, old_meta.table))
-        elif tables.get(old_meta.table) != create_table_sql(old_meta) or stored is not None:
-            raise SchemaMismatch(
-                f"cannot migrate {old.__name__} to {new.__name__}: the db needs a table {old_meta.table!r} "
-                f"that matches {old.__name__} and no table {new_meta.table!r}"
-            )
-        conn.execute(create_table_sql(new_meta))
-        db = Db(conn, _trust)
-        fn(db)
-        _repoint_referrers(conn, old_meta, new_meta)
-        conn.execute(drop_table_sql(old_meta.table))
-        # The indexes come last: a moved table keeps its index names, and `IF NOT EXISTS` would skip a clash.
-        _execute(conn, (create_index_sql(new_meta, index) for index in new_meta.indexes))
-        used = [new_meta, *(meta(c) for c in db._known if c is not old)]
-        _check_tables(used, dict(conn.execute(LIST_TABLES)))
-        _check_foreign_keys(conn)
-        conn.execute(COMMIT)
-    finally:
-        conn.close()  # also rolls back what was not committed
-
-
-def _repoint_referrers(conn: sqlite3.Connection, old: EntityMeta, new: EntityMeta) -> None:
-    """Make the foreign keys of the other tables that point to the old table point to the new one."""
-    tables = dict(conn.execute(LIST_TABLES))
-    for (table,) in conn.execute(REFERRERS, (old.table,)).fetchall():
-        if table != old.table:
-            indexes = conn.execute(LIST_INDEXES, (table,)).fetchall()
-            _execute(conn, repoint_sql(table, tables[table], old, new))
-            _execute(conn, (sql for _, sql in indexes))  # dropping the table dropped them
-
-
-def _check_foreign_keys(conn: sqlite3.Connection) -> None:
-    broken = conn.execute(FOREIGN_KEY_CHECK).fetchall()
-    if broken:
-        table, _, parent, _ = broken[0]
-        raise BrokenRef(
-            f"{len(broken)} references point to records that are not stored, such as one in {table!r} to {parent!r}"
-        )
 
 
 def _connect(path: str | os.PathLike[str], *, create: bool) -> sqlite3.Connection:

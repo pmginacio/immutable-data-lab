@@ -76,7 +76,7 @@ class RecordView[T]:
     """
 
     _conn: sqlite3.Connection
-    _reading: Counter[type]
+    _open_iterations: Counter[type]
     _query: Query
     _tx: int | None = None
 
@@ -89,12 +89,12 @@ class RecordView[T]:
         classes = classes_read(self._query)
         rows = self._read(sql, params)
         # SQLite does not say what an open SELECT returns once its tables change, so writes to them are refused.
-        self._reading.update(classes)
+        self._open_iterations.update(classes)
         try:
             for row in rows:
                 yield _from_row(self._meta, row)
         finally:
-            self._reading.subtract(classes)
+            self._open_iterations.subtract(classes)
 
     def __len__(self) -> int:
         return self._aggregate(aggregate_of(len))
@@ -189,7 +189,7 @@ class RecordView[T]:
         return default
 
     def _view(self, query: Query) -> "RecordView[T]":
-        return RecordView(self._conn, self._reading, query, self._tx)
+        return RecordView(self._conn, self._open_iterations, query, self._tx)
 
     def _aggregate(self, aggregate: Aggregate[Any], value: Value | None = None) -> Any:
         sql, params = aggregate_sql(self._query, self._tx, aggregate, value)
@@ -213,7 +213,7 @@ class RecordSet[T](RecordView[T]):
     _ref_checks: tuple[str, ...] = field(kw_only=True)
 
     def delete(self, *keys: str) -> None:
-        _check_idle(self._reading, [self._meta.cls])
+        _raise_if_iterating(self._open_iterations, [self._meta.cls])
         with _transaction(self._conn, self._ref_checks):
             written = _write(self._conn, delete_by_key_sql(self._meta), ((to_sql(k),) for k in keys))
             deleted = _records(self._meta, written)
@@ -224,7 +224,7 @@ class RecordSet[T](RecordView[T]):
         cond = all_of(*conds)
         check_condition(self._meta.cls, cond)
         writes, params = clear_sql(self._meta, cond)
-        _check_idle(self._reading, [self._meta.cls])
+        _raise_if_iterating(self._open_iterations, [self._meta.cls])
         with _transaction(self._conn, self._ref_checks):
             _write(self._conn, writes, [params])
 
@@ -234,12 +234,12 @@ class Snapshot:
     """The db as it was at transaction `tx`: the same reads as the db, and no writes."""
 
     _conn: sqlite3.Connection
-    _reading: Counter[type]  # shared with the db, which writes on the same connection
+    _open_iterations: Counter[type]  # shared with the db, which writes on the same connection
     _metas: frozendict[type, EntityMeta]
     tx: int
 
     def __getitem__[T](self, cls: type[T]) -> RecordView[T]:
-        return RecordView(self._conn, self._reading, Table(_meta_in(self._metas, cls).cls), self.tx)
+        return RecordView(self._conn, self._open_iterations, Table(_meta_in(self._metas, cls).cls), self.tx)
 
 
 class Db:
@@ -249,11 +249,11 @@ class Db:
         self._conn = conn
         self._metas = metas
         self._ref_checks = ref_checks  # SELECTs that return a row if a reference is broken, run before commit
-        self._reading: Counter[type] = Counter()
+        self._open_iterations: Counter[type] = Counter()
 
     def __getitem__[T](self, cls: type[T]) -> RecordSet[T]:
         table = Table(_meta_in(self._metas, cls).cls)
-        return RecordSet(self._conn, self._reading, table, _ref_checks=self._ref_checks)
+        return RecordSet(self._conn, self._open_iterations, table, _ref_checks=self._ref_checks)
 
     @property
     def tx(self) -> int:
@@ -278,7 +278,7 @@ class Db:
             if not 0 <= at <= latest:
                 raise ValueError(f"there is no committed transaction {at}; the latest is {latest}")
             tx = at
-        return Snapshot(self._conn, self._reading, self._metas, tx)
+        return Snapshot(self._conn, self._open_iterations, self._metas, tx)
 
     def transaction(self) -> AbstractContextManager[None]:
         return _transaction(self._conn, self._ref_checks)
@@ -314,7 +314,7 @@ class Db:
     def _apply_by_entity(self, objs: Sequence[object], write: _Write) -> None:
         """Runs `write` on the records of each class, all in one transaction."""
         groups = _grouped(objs)
-        _check_idle(self._reading, groups)
+        _raise_if_iterating(self._open_iterations, groups)
         with _transaction(self._conn, self._ref_checks):
             for cls, group in groups.items():
                 write(self._conn, _meta_in(self._metas, cls), group)
@@ -382,10 +382,10 @@ def _meta_in(metas: Mapping[type, EntityMeta], cls: type) -> EntityMeta:
         raise KeyError(f"{cls.__name__} was not passed to inlay.datoms.open") from None
 
 
-def _check_idle(reading: Counter[type], classes: Iterable[type]) -> None:
+def _raise_if_iterating(open_iterations: Counter[type], classes: Iterable[type]) -> None:
     """Raise if an iteration that is still open reads the table of one of `classes`."""
     for cls in classes:
-        if reading[cls] > 0:
+        if open_iterations[cls] > 0:
             raise RuntimeError(f"{cls.__name__} changed during iteration")
 
 

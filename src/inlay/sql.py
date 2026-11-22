@@ -38,9 +38,6 @@ REFERRERS = (
     "SELECT DISTINCT m.name FROM sqlite_master AS m, pragma_foreign_key_list(m.name) AS f "
     "WHERE m.type = 'table' AND f.\"table\" = ?"
 )
-# Foreign keys are not checked while tables are swapped, and renaming a table leaves the references to it alone.
-MIGRATION_SETUP = ("PRAGMA foreign_keys = OFF", "PRAGMA legacy_alter_table = ON")
-FOREIGN_KEY_CHECK = "PRAGMA foreign_key_check"
 
 
 def quote(name: str) -> str:
@@ -96,24 +93,9 @@ def reprefix_index_sql(name: str, sql: str, old_table: str, new_table: str) -> t
     return f"DROP INDEX {quote(name)}", sql.replace(quote(name), quote(new_name), 1)
 
 
-def repoint_sql(table: str, stored_sql: str, old: EntityMeta, new: EntityMeta) -> tuple[str, ...]:
-    """Rebuild `table` so that its foreign keys to `old` point to `new`, keeping its rows.
-
-    `stored_sql` is the stored `CREATE TABLE` of `table`; it names its references in the format of `_column_def`.
-    """
-    reference = f"REFERENCES {quote(old.table)} ({_column(old.key)})"
-    if reference not in stored_sql:
-        raise ValueError(f"table {table!r} has no foreign key to {old.table!r}")
-    staging = f"{table}__rebuild"
-    prefix = f"CREATE TABLE {quote(table)} "
-    new_reference = f"REFERENCES {quote(new.table)} ({_column(new.key)})"
-    columns = stored_sql.removeprefix(prefix).replace(reference, new_reference)
-    return (
-        f"CREATE TABLE {quote(staging)} {columns}",
-        f"INSERT INTO {quote(staging)} SELECT * FROM {quote(table)}",
-        drop_table_sql(table),
-        rename_table_sql(staging, table),
-    )
+def copy_rows_sql(table: str, m: EntityMeta) -> str:
+    """Copy every row of `table`, which has the columns of `m`, into the table of `m`."""
+    return f"INSERT INTO {quote(m.table)} ({_columns(m)}) SELECT {_columns(m)} FROM {quote(table)}"
 
 
 def _column_def(f: FieldMeta, table: str) -> str:

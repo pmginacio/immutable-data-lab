@@ -66,7 +66,8 @@ def test_a_field_can_be_computed_from_the_records_of_another_class(tmp_path):
         db.add(ana, OrderBefore(id="o1", customer=ana.id), OrderBefore(id="o2", customer=ana.id))
         db.add(LineItemBefore(order="o1", price=10, qty=2), LineItemBefore(order="o1", price=5, qty=1))
 
-    inlay.migrate(add_total_amount, OrderLegacy, Order, path=path)
+    with inlay.open(path) as db:
+        db.migrate(add_total_amount, OrderLegacy, Order)
 
     with inlay.open(path) as db:
         assert {o.id: o.total_amount for o in db[Order]} == {"o1": 25, "o2": 0}
