@@ -614,7 +614,7 @@ This is version one, and the limits are on purpose.
 
 - SQLite only.
 - A `Db` works only in the thread and process that opened it: open one in each.
-- No enums or composite keys.
+- No composite keys.
 - No cascading deletes or reverse relations.
 - Few functions so far: arithmetic, `to_month` and `to_day`.
 - Slices that skip many records are slow, because SQLite reads and discards the skipped rows.

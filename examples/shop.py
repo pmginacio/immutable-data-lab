@@ -10,14 +10,14 @@ The other comments are the ones an app would have anyway.
 """
 
 import tempfile
-from collections import Counter
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import date, datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
 
 import inlay
-from inlay import AlreadyExists, Db, Function, Query, Ref, entity, key, one_of, projection, to_month
+from inlay import AlreadyExists, Db, Function, Query, Ref, entity, key, one_of, projection, query, to_month
 
 # ---------------------------------------------------------------------------
 # 1. The data
@@ -28,7 +28,11 @@ from inlay import AlreadyExists, Db, Function, Query, Ref, entity, key, one_of, 
 # inlay: `indexes` lists every index. Nothing is indexed unless it is listed here.
 # ---------------------------------------------------------------------------
 
-NEW, PAID, CANCELLED = "new", "paid", "cancelled"
+# inlay: a `StrEnum` or an `IntEnum` field is stored as its value and read back as a member.
+class Status(StrEnum):
+    NEW = "new"
+    PAID = "paid"
+    CANCELLED = "cancelled"
 
 
 # inlay: a field typed `X | None` is optional, and an optional reference is written `Ref[Customer, str | None]`.
@@ -56,7 +60,7 @@ class Product:
 class Order:
     id: str = key()
     customer: Ref[Customer]
-    status: str
+    status: Status
     placed: datetime
     total: int  # worked out when the order is placed
     paid: datetime | None = None
@@ -87,7 +91,7 @@ def build_order(
     customer_id: str, basket: Mapping[str, int], products: Mapping[str, Product], now: datetime
 ) -> tuple[Order, list[OrderLine]]:
     total = sum(products[pid].price * qty for pid, qty in basket.items())
-    order = Order(customer=customer_id, status=NEW, placed=now, total=total)
+    order = Order(customer=customer_id, status=Status.NEW, placed=now, total=total)
     # inlay: the order already has its key, so the lines can refer to it before anything is stored.
     lines = [
         OrderLine(order=order.id, product=pid, qty=qty, unit_price=products[pid].price)
@@ -96,8 +100,8 @@ def build_order(
     return order, lines
 
 
-def move_to(order: Order, status: str) -> Order:
-    if order.status != NEW:
+def move_to(order: Order, status: Status) -> Order:
+    if order.status != Status.NEW:
         raise ShopError(f"the order is already {order.status}")
     # inlay: a record never changes. `replace` makes the next version, and the same key makes it the same record.
     return replace(order, status=status)
@@ -146,14 +150,14 @@ def place_order(db: Db, customer_id: str, basket: Mapping[str, int], now: dateti
 
 def pay(db: Db, order_id: str, now: datetime) -> Order:
     order = get_order(db, order_id)
-    paid = replace(move_to(order, PAID), paid=now)
+    paid = replace(move_to(order, Status.PAID), paid=now)
     db.update(paid)
     return paid
 
 
 def cancel(db: Db, order_id: str) -> Order:
     with db.transaction():
-        cancelled = move_to(get_order(db, order_id), CANCELLED)
+        cancelled = move_to(get_order(db, order_id), Status.CANCELLED)
         # inlay: a view is lazy and runs its query each time it is read. `tuple` takes a snapshot, to read it twice.
         lines = tuple(db[OrderLine].filter(OrderLine.order == order_id))
         products = {p.id: p for p in db[Product].filter(one_of(Product.id, [line.product for line in lines]))}
@@ -174,11 +178,13 @@ def get_order(db: Db, order_id: str) -> Order:
 #
 # inlay: `db[Order]` is a set of orders. `filter`, `sorted` and slicing return new views, and nothing runs until
 # a view is read. A view is a value, so functions can take one, add to it, and give it back.
+# inlay: a query needs no db to be built. `query(Order)` starts one, and `db[q]` runs it, so a query used in
+# many places can be defined once, here.
 # ---------------------------------------------------------------------------
 
-
-def paid_orders(db: Db) -> Query[Order]:
-    return db[Order].filter(Order.status == PAID)
+paid_orders = query(Order).filter(Order.status == Status.PAID)
+# inlay: `aggregate_by` gives groups, a mapping that also runs in the db and is filtered, sorted and sliced.
+spent = paid_orders.aggregate_by(Order.customer, sum, Order.total)
 
 
 def orders_in_city(orders: Query[Order], city: str) -> Query[Order]:
@@ -199,18 +205,15 @@ def low_stock(db: Db, at_most: int) -> Query[Product]:
 
 def waiting_too_long(db: Db, now: datetime) -> Query[Order]:
     # inlay: several conditions in one `filter` are combined with "and". Dates work like any other field.
-    return db[Order].filter(Order.status == NEW, Order.placed < now - timedelta(days=7))
+    return db[Order].filter(Order.status == Status.NEW, Order.placed < now - timedelta(days=7))
 
 
-def revenue_by_customer(db: Db) -> list[tuple[Customer, int]]:
-    # inlay: a view is iterable, and it loads one record at a time, so grouping can be ordinary Python.
-    # `aggregate_by`, below, groups inside the db instead.
-    revenue = Counter[str]()
-    for order in paid_orders(db):
-        revenue[order.customer] += order.total
+def top_customers(db: Db, n: int) -> list[tuple[Customer, int]]:
+    # inlay: `items()` reads the groups in one query, here the `n` biggest, in that order.
+    revenue = dict(db[spent].sorted(key=spent.value, reverse=True)[:n].items())
     # There is no join: look the related records up in one query and combine them.
     customers = {c.id: c for c in db[Customer].filter(one_of(Customer.id, revenue))}
-    return [(customers[customer_id], total) for customer_id, total in revenue.most_common()]
+    return [(customers[customer_id], total) for customer_id, total in revenue.items()]
 
 
 def orders_per_month(db: Db) -> Mapping[date, int]:
@@ -228,11 +231,12 @@ def orders_per_hour(db: Db) -> Mapping[int, int]:
 
 def revenue_from_referrals(db: Db, customer_id: str) -> int:
     # inlay: a path can go through an optional reference. A customer that nobody referred matches nothing.
-    return paid_orders(db).filter(Order.customer.referred_by == customer_id).sum(Order.total)
+    return db[paid_orders].filter(Order.customer.referred_by == customer_id).sum(Order.total)
 
 
 # inlay: a projection is the shape of a result, such as the rows an API returns: fields of the order and values
 # of its customer, read in one query. It has no table, and a view turns into it with `project`.
+# inlay: a field can be the value of the record's group, here what its customer spent; None for a key with no group.
 @projection(Order)
 class OrderRow:
     id: str
@@ -240,11 +244,12 @@ class OrderRow:
     total: int
     customer_name: str = Order.customer.name
     city: str = Order.customer.city
+    customer_spent: int | None = spent[Order.customer]
 
 
 def latest_paid(db: Db, city: str | None = None) -> Query[OrderRow]:
     # inlay: conditions on the order come before `project`, and the fields of the projection work after it.
-    rows = paid_orders(db).project(OrderRow)
+    rows = db[paid_orders].project(OrderRow)
     if city is not None:
         rows = rows.filter(OrderRow.city == city)
     return rows.sorted(key=OrderRow.placed, reverse=True)[:3]
@@ -310,11 +315,11 @@ def main() -> None:
             except ShopError as e:
                 print(f"Refused: {e}")
 
-            print("\nRevenue from paid orders")
-            for customer, total in revenue_by_customer(db):
+            print("\nTop customers")
+            for customer, total in top_customers(db, 2):
                 print(f"  {customer.name:<4} {money(total):>8}")
 
-            lisbon = orders_in_city(paid_orders(db), "Lisbon")
+            lisbon = orders_in_city(db[paid_orders], "Lisbon")
             # inlay: `len` and `sum` run inside the db and return one number. No record is loaded.
             print(f"\nLisbon: {len(lisbon)} paid orders, {money(lisbon.sum(Order.total))}")
             print(f"Brought in by Ana's referrals: {money(revenue_from_referrals(db, ana.id))}")
@@ -332,9 +337,10 @@ def main() -> None:
                 paid = "not paid" if order.paid is None else f"paid {order.paid:%H:%M}"
                 print(f"  {order.placed:%d %b %H:%M}  {order.status:<9} {money(order.total):>8}  {paid}")
 
-            print("\nLatest paid orders in Porto")
+            print("\nLatest paid orders in Porto, and what each customer spent in all")
             for row in latest_paid(db, city="Porto"):
-                print(f"  {row.placed:%d %b}  {row.customer_name:<4} {money(row.total):>8}")
+                spent_in_all = money(row.customer_spent or 0)
+                print(f"  {row.placed:%d %b}  {row.customer_name:<4} {money(row.total):>8}  of {spent_in_all}")
 
             print(f"\nStock worth {money(stock_value(db))}")
             print("\nLow stock")
