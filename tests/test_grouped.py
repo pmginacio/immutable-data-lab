@@ -3,7 +3,7 @@
 import pytest
 
 import inlay
-from inlay import Ref, entity, is_none, key
+from inlay import Ref, entity, key
 
 
 @entity
@@ -50,7 +50,7 @@ def test_a_query_reads_the_value_of_each_records_own_group(db):
 def test_another_class_looks_it_up_by_its_key_and_gets_none_for_a_key_with_no_records(db):
     totals = db[Order].aggregate_by(Order.customer, sum, Order.total)
     assert ids(db[Customer].filter(totals[Customer.id] > 100)) == ["ana"]
-    assert ids(db[Customer].filter(is_none(totals[Customer.id]))) == ["bob"]
+    assert ids(db[Customer].filter(totals[Customer.id] == None)) == ["bob"]
 
 
 def test_keys_read_through_a_ref_and_several_keys(db):
@@ -94,7 +94,7 @@ def test_groups_are_sorted_and_sliced_and_their_lookups_follow(db, totals):
     assert dict(top) == {"ana": 200}
     with pytest.raises(KeyError):
         top["bob"]
-    assert ids(db[Customer].filter(is_none(top[Customer.id]))) == ["bob"]
+    assert ids(db[Customer].filter(top[Customer.id] == None)) == ["bob"]
 
 
 def test_a_group_is_looked_up_by_all_its_keys(db):

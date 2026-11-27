@@ -196,7 +196,7 @@ def test_clear_with_conditions_deletes_only_matching_records(db):
     ana, bob = Customer(name="Ana"), Customer(name="Bob")
     small, big = Order(customer=ana.id, total=5), Order(customer=bob.id, total=500)
     db.add(ana, bob, small, big)
-    db[Order].clear(Order.total > 100, Order.customer.name == "Bob")
+    db[Order].clear((Order.total > 100) & (Order.customer.name == "Bob"))
     assert set(db[Order]) == {small}
     db[Order].clear(Order.total > 100)
     assert set(db[Order]) == {small}

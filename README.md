@@ -190,7 +190,7 @@ with inlay.open() as db:
     # `filter` takes ordinary Python expressions. `Order.total > 100` is not evaluated in Python: it is a condition.
     # The conditions are evaluated by the DB, not in python.
     # Notice how you can also filter on referenced class attributes.
-    lazy_big_lisbon_orders = orders.filter(Order.total > 100, Order.customer.city == "Lisbon")
+    lazy_big_lisbon_orders = orders.filter((Order.total > 100) & (Order.customer.city == "Lisbon"))
 
     # `lazy_big_lisbon_orders` is a lazy query: nothing has run yet, and it can be filtered further.
     # Sorting and slicing are added to the same query.
@@ -213,7 +213,7 @@ Several processes that start on a new file at once check and register inside `db
 A field typed `X | None` can hold `None`, and an optional reference is written `Ref[Customer, str | None]`.
 
 ```python
-from inlay import is_none, negate
+from inlay import coalesce, negate
 
 @entity(indexes=[("customer",)])
 class Order:
@@ -223,12 +223,16 @@ class Order:
     discount: int | None = None
 
 orders = db[Order]
-orders.filter(Order.discount == None)          # the orders with no discount; `is_none(Order.discount)` is the same
+orders.filter(Order.discount == None)          # the orders with no discount
 orders.filter(Order.discount != 5)             # includes the orders with no discount, as in Python
 orders.filter(Order.discount > 1)              # a comparison with None is false, so these are left out
 orders.filter(negate(Order.discount > 1))      # and here they are in
 orders.filter(Order.customer.city == "Lisbon") # an order with no customer matches nothing through it
+orders.filter(coalesce(Order.discount, 0) < 5) # the first value that is not None, as SQL's COALESCE
+orders.sorted(key=coalesce(Order.customer.city, "unknown"))  # through an empty Ref the city counts as None
 ```
+
+`coalesce` also works as the value of a projection field, and on plain values, where it is computed in Python.
 
 Conditions follow Python, so `==` and `!=` treat `None` as a value, and a condition and its negation always split the records in two.
 `one_of` can include `None`.
@@ -325,7 +329,7 @@ Groups are filtered, sorted and sliced like records, by `value` and by their key
 totals = db[Order].aggregate_by(Order.customer, sum, Order.total)
 top_five = totals.sorted(key=totals.value, reverse=True)[:5]
 dict(top_five.items())                           # {"bob": 4200, "ana": 3100, ...}, biggest first
-totals.filter(totals.value > 1000, Order.customer != ana.id)
+totals.filter((totals.value > 1000) & (Order.customer != ana.id))
 ```
 
 A condition on a field that is not a key, such as `Order.total`, is refused: it belongs before `aggregate_by`, on the records.
@@ -365,12 +369,15 @@ Built into another query, as a group value or in `one_of`, a query adds its cond
 ### Your own functions
 
 `to_month` and `avg` are not special: they are a `Function` and an `Aggregate`, and yours work the same way.
-Each one is written twice, in Python for plain values and in SQL for the db, with `{}` where the argument goes:
+Each one is written twice, in Python for plain values and in SQL for the db, with `{}` where each argument goes.
+A function takes the type of each argument as a tuple, and `(int, ...)` takes any number of ints, whose SQL then has one `{}` for all of them.
+A type variable stands for the same type wherever it appears, as in Python's generics: `coalesce` takes `(T | None, ...)` and gives `T`, with `T = TypeVar("T")`.
 
 ```python
 from inlay import Aggregate, Function
 
-hour = Function("hour", datetime, int, lambda x: x.hour, "CAST(strftime('%H', {}) AS INTEGER)")
+hour = Function("hour", (datetime,), int, lambda x: x.hour, "CAST(strftime('%H', {}) AS INTEGER)")
+substr = Function("substr", (str, int, int), str, lambda s, start, n: s[start - 1:start - 1 + n], "substr({}, {}, {})")
 distinct_count = Aggregate("distinct_count", lambda values: len(set(values)), "COUNT(DISTINCT {})", arg=object, result=int)
 
 late = invoices.filter(hour(Invoice.at) >= 22)
@@ -381,7 +388,7 @@ hour(datetime(2026, 1, 1, 23))  # 23
 
 The two versions must give the same answers, and nothing checks that they do.
 The SQL sees values as inlay stores them: dates as ISO 8601 text, and aware datetimes in UTC.
-A function takes one argument for now.
+In the db, a function given None for an argument it takes without None gives None, as SQL's do; `coalesce`, which takes None, is how to choose a value instead.
 
 ### Projections
 
@@ -571,7 +578,7 @@ Order.customer.city == "Lisbon"
 `==` becomes SQLite's `IS`, which treats NULL as a value and uses indexes as `=` does, and `negate` counts an unknown result as false first, so conditions keep Python's two values.
 
 Relations become subqueries, so there are no joins to write and no duplicate rows.
-Combine conditions with `&`, `|`, `all_of`, `any_of`, `negate` and `none_of`.
+`filter` takes one condition. Combine conditions with `&`, `|` and `negate`, and a list of them with `all_of` and `any_of`.
 Python's `and`, `or`, `not` and `1 < x < 5` would silently drop part of a condition, so a condition refuses to be a boolean and names the right tool.
 
 **Queries are lazy and immutable.**

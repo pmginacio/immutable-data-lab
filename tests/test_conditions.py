@@ -3,7 +3,7 @@ from datetime import date, datetime
 
 import pytest
 
-from inlay import Ref, all_of, any_of, contains, entity, key, negate, none_of, one_of, to_day, to_month
+from inlay import Ref, all_of, any_of, contains, entity, key, negate, one_of, to_day, to_month
 from inlay.meta import FieldMeta, meta
 from inlay.nodes import And, BinOp, Call, Compare, Filter, In, Match, Not, Or, Table, check_condition
 
@@ -71,8 +71,8 @@ def test_comparisons_build_compare_nodes(fn, op):
     (Order.total * 100 > 5000, Compare(BinOp("*", TOTAL, 100), ">", 5000)),
     (100 * Order.total > 5000, Compare(BinOp("*", 100, TOTAL), ">", 5000)),
     (Order.total - Order.discount > 0, Compare(BinOp("-", TOTAL, DISCOUNT), ">", 0)),
-    (to_month(Order.placed) == date(2026, 1, 1), Compare(Call(to_month, PLACED), "==", date(2026, 1, 1))),
-    (to_day(Order.placed) < date(2026, 1, 1), Compare(Call(to_day, PLACED), "<", date(2026, 1, 1))),
+    (to_month(Order.placed) == date(2026, 1, 1), Compare(Call(to_month, (PLACED,)), "==", date(2026, 1, 1))),
+    (to_day(Order.placed) < date(2026, 1, 1), Compare(Call(to_day, (PLACED,)), "<", date(2026, 1, 1))),
 ])
 def test_builder_makes_the_tree(built, tree):
     assert built == tree
@@ -100,8 +100,7 @@ def test_combining_conditions():
     assert a & b == all_of(a, b) == And((a, b))
     assert a | b == any_of(a, b) == Or((a, b))
     assert negate(a) == Not(a)
-    assert none_of(a, b) == Not(Or((a, b)))
-    assert (all_of(), any_of(), none_of()) == (And(()), Or(()), Not(Or(())))
+    assert (all_of(), any_of()) == (And(()), Or(()))
 
 
 @pytest.mark.parametrize("mistake", [lambda: contains("name", "n"), lambda: one_of("city", ["Lisbon"])])

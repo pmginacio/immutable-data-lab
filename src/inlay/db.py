@@ -13,6 +13,7 @@ from inlay.functions import Aggregate, aggregate_of
 from inlay.meta import EntityMeta, FieldMeta, meta, reachable, table_name
 from inlay.meta import metas as entity_metas
 from inlay.nodes import (
+    as_condition,
     Compare,
     Condition,
     Filter,
@@ -118,15 +119,15 @@ class Query[T]:
         if type(record) is not self._meta.cls:
             return False
         equal = (Compare(f, "==", getattr(record, f.name)) for f in self._meta.fields)
-        return len(self.filter(*equal)) > 0
+        return len(self.filter(all_of(*equal))) > 0
 
     def __getitem__(self, s: slice) -> "Query[T]":
         if not isinstance(s, slice):
             raise TypeError("a query can only be sliced, as in q[:10]")
         return Query(Slice(self._node, *_slice_bounds(s)), self._db)
 
-    def filter(self, *conds: Condition | bool) -> "Query[T]":
-        cond = all_of(*conds)
+    def filter(self, cond: Condition | bool) -> "Query[T]":
+        cond = as_condition(cond)
         check_condition(self._meta.cls, cond)
         return Query(Filter(self._node, cond), self._db)
 
@@ -201,7 +202,7 @@ class Query[T]:
         own = own_value(self._meta.cls, value)
         if aggregate.arg is None:
             raise TypeError(f"{aggregate.name} takes no value")
-        if not issubclass(t := result_type(own), aggregate.arg):
+        if not aggregate.takes(t := result_type(own)):
             raise TypeError(f"{aggregate.name} cannot take {describe(own)}, a {t.__name__}")
         return own
 
@@ -289,8 +290,8 @@ class Grouped[K, V](Mapping[K, V]):
     def values(self) -> ValuesView[V]:
         return self._read().values()
 
-    def filter(self, *conds: Condition | bool) -> "Grouped[K, V]":
-        cond = group_condition(root_group(self._node), all_of(*conds))
+    def filter(self, cond: Condition | bool) -> "Grouped[K, V]":
+        cond = group_condition(root_group(self._node), as_condition(cond))
         return replace(self, _node=Filter(self._node, cond))
 
     def sorted(self, *, key: Any, reverse: bool = False) -> "Grouped[K, V]":
@@ -335,8 +336,8 @@ class RecordSet[T](Query[T]):
             if deleted != len(keys):
                 raise Missing(f"{len(keys) - deleted} of the {self._meta.cls.__name__} keys are not stored")
 
-    def clear(self, *conds: Condition | bool) -> None:
-        cond = all_of(*conds)
+    def clear(self, cond: Condition | bool = all_of()) -> None:
+        cond = as_condition(cond)
         check_condition(self._meta.cls, cond)
         sql, params = clear_sql(self._meta, cond)
         db = _bound(self._db)

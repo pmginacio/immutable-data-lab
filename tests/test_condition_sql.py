@@ -3,7 +3,7 @@ from datetime import date, datetime
 
 import pytest
 
-from inlay import Ref, all_of, any_of, contains, entity, key, negate, none_of, one_of, to_day, to_month
+from inlay import Ref, all_of, any_of, contains, entity, key, negate, one_of, to_day, to_month
 from inlay.meta import meta
 from inlay.sql import condition_sql, create_table_sql, insert_sql, quote
 from inlay.types import to_sql
@@ -87,10 +87,8 @@ def conn():
         (Customer, (Customer.city == "Lisbon") & Customer.name.startswith("Anab"), {"anabel"}),
         (Customer, (Customer.city == "Porto") | (Customer.city == "Faro"), {"bob", "rita"}),
         (Customer, negate(Customer.city == "Lisbon"), {"bob", "rita"}),
-        (Customer, none_of(Customer.city == "Lisbon", Customer.city == "Porto"), {"rita"}),
         (Customer, all_of(), ALL_CUSTOMERS),
         (Customer, any_of(), set()),
-        (Customer, none_of(), ALL_CUSTOMERS),
         (Order, Order.total > Order.discount, {"o1", "o3"}),
         (Order, 100 < Order.total, {"o1"}),
         (Order, Order.total * 2 > 250, {"o1"}),

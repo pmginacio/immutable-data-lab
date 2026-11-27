@@ -239,9 +239,9 @@ def value_sql(value: object) -> tuple[str, list[object]]:
     match value:
         case FieldMeta():
             return _column(value), []
-        case Call(fn, arg):
-            sql, params = value_sql(arg)
-            return fn.sql.format(sql), params
+        case Call(fn, args):
+            parts = [value_sql(v) for v in args]
+            return fn.sql_of([sql for sql, _ in parts]), [p for _, params in parts for p in params]
         case BinOp(op, left, right):
             left_sql, left_params = value_sql(left)
             right_sql, right_params = value_sql(right)

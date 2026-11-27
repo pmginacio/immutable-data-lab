@@ -43,6 +43,7 @@ from inlay.history.sql import (
 from inlay.meta import EntityMeta, meta, reachable
 from inlay.meta import metas as entity_metas
 from inlay.nodes import (
+    as_condition,
     Compare,
     Condition,
     Filter,
@@ -95,7 +96,7 @@ class RecordView[T]:
         if type(record) is not self._meta.cls:
             return False
         equal = (Compare(f, "==", getattr(record, f.name)) for f in self._meta.fields)
-        return len(self.filter(*equal)) > 0
+        return len(self.filter(all_of(*equal))) > 0
 
     def __getitem__(self, s: slice) -> "RecordView[T]":
         if not isinstance(s, slice):
@@ -105,8 +106,8 @@ class RecordView[T]:
             raise ValueError("a slice takes a start and a stop, and no negative numbers")
         return self._view(Slice(self._query, start, stop))
 
-    def filter(self, *conds: Condition | bool) -> "RecordView[T]":
-        cond = all_of(*conds)
+    def filter(self, cond: Condition | bool) -> "RecordView[T]":
+        cond = as_condition(cond)
         check_condition(self._meta.cls, cond)
         return self._view(Filter(self._query, cond))
 
@@ -155,7 +156,7 @@ class RecordView[T]:
         sql, params = aggregate_sql(self._query, self._tx, aggregate, own, keys)
         rows = self._conn.execute(sql, params).fetchall()
         key_types = [result_type(k) for k in keys]
-        value_type = aggregate.result or result_type(own)
+        value_type = aggregate.result_type(None if own is None else result_type(own))
         groups: dict[Any, Any] = {
             tuple(map(from_sql, row[:-1], key_types)): from_sql(row[-1], value_type) for row in rows
         }
@@ -166,7 +167,7 @@ class RecordView[T]:
         own = own_value(self._meta.cls, value)
         if aggregate.arg is None:
             raise TypeError(f"{aggregate.name} takes no value")
-        if not issubclass(t := result_type(own), aggregate.arg):
+        if not aggregate.takes(t := result_type(own)):
             raise TypeError(f"{aggregate.name} cannot take {describe(own)}, a {t.__name__}")
         return own
 
@@ -197,8 +198,8 @@ class RecordSet[T](RecordView[T]):
             if deleted != len(keys):
                 raise Missing(f"{len(keys) - deleted} of the {self._meta.cls.__name__} keys are not stored")
 
-    def clear(self, *conds: Condition | bool) -> None:
-        cond = all_of(*conds)
+    def clear(self, cond: Condition | bool = all_of()) -> None:
+        cond = as_condition(cond)
         check_condition(self._meta.cls, cond)
         sql, params = clear_sql(self._meta, cond)
         _raise_if_iterating(self._open_iterations, [self._meta.cls])

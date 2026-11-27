@@ -45,10 +45,10 @@ class Expr:
             raise AttributeError(f"{describe(ref)} is not a Ref, so it has no field {name!r}")
         return Expr((*self.__relations, ref), meta(ref.target).field(name))
 
-    def __eq__(self, other: object) -> Condition:  # type: ignore[override]
+    def __eq__(self, other: object) -> Condition:
         return self.__compare("==", other)
 
-    def __ne__(self, other: object) -> Condition:  # type: ignore[override]
+    def __ne__(self, other: object) -> Condition:
         return self.__compare("!=", other)
 
     def __lt__(self, other: object) -> Condition:
@@ -87,9 +87,18 @@ class Expr:
     def __rtruediv__(self, other: object) -> Expr:
         return self.__with(BinOp("/", self.__operand(other), self.__value))
 
-    def _apply(self, fn: Function[Any, Any]) -> Expr:
-        """`fn` applied to this value. Calling `fn` on an `Expr` comes here, through `functions.Applicable`."""
-        return self.__with(Call(fn, self.__value))
+    def _apply(self, fn: Function[Any], args: tuple[object, ...]) -> Expr:
+        """`fn` of `args`, this value among them. Calling `fn` with an `Expr` comes here, through `functions.Applicable`.
+
+        Each value is read on the record it starts from, so values through different `Ref`s combine, and one
+        through an empty `Ref` is None: `coalesce(Order.customer.city, "unknown")` is "unknown" for an order
+        with no customer.
+        """
+        call = Call(fn, tuple(_own(a) if isinstance(a, Expr) else a for a in args))
+        if len({f.owner for f in value_fields(call)}) > 1:
+            raise ValueError("only values of the same record can be combined")
+        result_type(call)
+        return Expr((), call)
 
     def startswith(self, prefix: str) -> Condition:
         relations, field = _field_parts(self)
@@ -125,10 +134,10 @@ def contains(field: str, text: str) -> Condition:
     return _through(relations, Match(f, "contains", text))
 
 
-def is_none(value: object) -> Condition:
-    """`value` is None. The same as `value == None`, which linters flag."""
+def _own(value: object) -> Value:
+    """`value` read on the record its first `Ref` starts from."""
     relations, v = _parts(value)
-    return _through(relations, Compare(v, "==", None))
+    return RefValue(relations, v) if relations else v
 
 
 def one_of[T](field: T, values: Iterable[T]) -> Condition:
@@ -138,8 +147,7 @@ def one_of[T](field: T, values: Iterable[T]) -> Condition:
 
 def own_value(cls: type, value: object) -> Value:
     """The value `value` stands for on a record of `cls`: computed from its fields, or read through its `Ref`s."""
-    relations, v = _parts(value)
-    own = RefValue(relations, v) if relations else v
+    own = _own(value)
     for field in value_fields(own):
         if field.owner is not cls:
             raise ValueError(f"{field.owner.__name__}.{field.name} is not a field of {cls.__name__}")

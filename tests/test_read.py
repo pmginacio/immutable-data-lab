@@ -72,7 +72,7 @@ def test_every_read_sees_current_data(db):
 
 
 def test_filter_takes_conditions_and_relations(db):
-    big_in_lisbon = db[Order].filter(Order.total > 100, Order.customer.city == "Lisbon")
+    big_in_lisbon = db[Order].filter((Order.total > 100) & (Order.customer.city == "Lisbon"))
     assert set(ids(big_in_lisbon)) == {"o1", "o4"}
 
 

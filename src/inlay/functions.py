@@ -1,37 +1,99 @@
 import statistics
+from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import date
-from types import UnionType
-from typing import Any, Protocol, cast, runtime_checkable
+from types import NoneType
+from typing import Any, Protocol, TypeVar, cast, get_args, runtime_checkable
 
 
 @runtime_checkable
 class Applicable(Protocol):
     """A value that a `Function` is applied to by building a node, such as the `Expr` of `Order.placed`."""
 
-    def _apply(self, fn: Function[Any, Any]) -> Any: ...
+    def _apply(self, fn: Function[Any], args: tuple[object, ...]) -> Any: ...
 
 
 @dataclass(frozen=True)
-class Function[A, R]:
-    """A function of one value: computed in Python on a plain value, and by the db on a field in a condition.
+class Function[R]:
+    """A function of values: computed in Python on plain values, and by the db when a field is among them.
 
-    `sql` is the SQL that computes it, with `{}` where the SQL of the argument goes.
+    `args` is the type of each argument, as `(date,)` or `(str, int, int)`, and `(int, ...)` takes any number
+    of `int`s, as `tuple[int, ...]` says.
+    A type variable stands for the same type wherever it appears, as in Python's generics: with
+    `T = TypeVar("T")`, arguments `(T, T)` and result `T` give the type of the two arguments.
+    `sql` is the SQL that computes it, with `{}` for each argument, or with one `{}` for all of them, joined
+    by commas, when it takes any number.
+
+    In the db, given None for an argument it takes without None, it gives None, as SQL's functions do.
+    A function that takes None, as `coalesce` does, gives None only when all its arguments are None.
     """
 
     name: str
-    arg: type[A]
-    result: type[R]
-    python: Callable[[A], R]
+    args: tuple[object, ...]  # types, unions, type variables, and `...`
+    result: type[R] | TypeVar
+    python: Callable[..., R]
     sql: str
 
-    def __call__(self, x: A) -> R:
-        if isinstance(x, self.arg):
-            return self.python(x)
-        if isinstance(x, Applicable):
-            return cast(R, x._apply(self))
-        raise TypeError(f"{self.name} needs a {self.arg.__name__}, got {x!r}")
+    def __call__(self, *args: object) -> R:
+        if applicable := next((a for a in args if isinstance(a, Applicable)), None):
+            return cast(R, applicable._apply(self, args))
+        self.result_type(tuple(type(a) for a in args))
+        return self.python(*args)
+
+    def result_type(self, types: tuple[type, ...]) -> type:
+        """The type the function gives for arguments of `types`. Raises if they are not what it takes."""
+        takes = self.args[:1] * len(types) if self.args[-1] is Ellipsis else self.args
+        if len(types) != len(takes):
+            raise TypeError(f"{self.name} takes {len(takes)} arguments, got {len(types)}")
+        found: dict[TypeVar, set[type]] = defaultdict(set)
+        for given, taken in zip(types, takes):
+            if not _accepts(taken, given):
+                raise TypeError(f"{self.name} needs a {_name(taken)}, got a {given.__name__}")
+            for var in _type_vars(taken):
+                if given is not NoneType:
+                    found[var].add(given)
+        if not isinstance(self.result, TypeVar):
+            return self.result
+        return _one_type(self.name, found[self.result])
+
+    def takes_none(self) -> bool:
+        return any(NoneType in get_args(t) for t in self.args)
+
+    def sql_of(self, args: list[str]) -> str:
+        """The SQL of the function of arguments whose SQL is `args`."""
+        return self.sql.format(", ".join(args)) if self.args[-1] is Ellipsis else self.sql.format(*args)
+
+
+def _accepts(taken: object, given: type) -> bool:
+    """Whether a value of type `given` can be passed where `taken` is declared: a type, a union, or a
+    type variable, which takes the types it is constrained to, those of its bound, or any."""
+    if isinstance(taken, TypeVar):
+        if taken.__constraints__:
+            return any(issubclass(given, c) for c in taken.__constraints__)
+        return issubclass(given, taken.__bound__ or object)
+    if parts := get_args(taken):
+        return any(_accepts(part, given) for part in parts)
+    return issubclass(given, cast(type, taken))
+
+
+def _type_vars(taken: object) -> list[TypeVar]:
+    return [taken] if isinstance(taken, TypeVar) else [t for t in get_args(taken) if isinstance(t, TypeVar)]
+
+
+def _one_type(name: str, types: set[type]) -> type:
+    """The one type of values of `types`: a `float` for `int`s and `float`s, and None's type for none."""
+    if not types:
+        return NoneType
+    if types == {int, float}:
+        return float
+    if len(types) != 1:
+        raise TypeError(f"{name} needs values of one type, got {', '.join(sorted(t.__name__ for t in types))}")
+    return next(iter(types))
+
+
+def _name(t: object) -> str:
+    return getattr(t, "__name__", str(t))
 
 
 @dataclass(frozen=True)
@@ -39,34 +101,53 @@ class Aggregate[R]:
     """A function of many values: computed in Python on an iterable, and by the db over the records of a view.
 
     `sql` is the SQL that computes it, with `{}` where the SQL of the value goes.
-    `arg` is the type of the values it takes, `object` for any, or None when it takes no value and counts records.
-    `result` is the type it gives, or None for the type of the values it takes.
+    `arg` is the type of the values it takes, or None when it takes no value and counts records.
+    `result` is the type it gives; a type variable that is also `arg` gives the type of the values it takes.
     """
 
     name: str
     python: Callable[[Iterable[Any]], R]
     sql: str
-    arg: type | UnionType | None
-    result: type | None = None
+    arg: object | None
+    result: type | TypeVar
 
     def __call__(self, values: Iterable[Any]) -> R:
         return self.python(values)
 
+    def takes(self, value_type: type) -> bool:
+        return self.arg is not None and _accepts(self.arg, value_type)
+
+    def result_type(self, value_type: type | None) -> type:
+        """The type it gives over values of `value_type`, None when it takes no value."""
+        return cast(type, value_type) if isinstance(self.result, TypeVar) else self.result
+
 
 # Dates are stored as ISO 8601 text, which is also what SQLite's date functions read and write.
-to_month = Function("to_month", date, date, lambda x: date(x.year, x.month, 1), "strftime('%Y-%m-01', {})")
-to_day = Function("to_day", date, date, lambda x: date(x.year, x.month, x.day), "date({})")
+to_month = Function("to_month", (date,), date, lambda x: date(x.year, x.month, 1), "strftime('%Y-%m-01', {})")
+to_day = Function("to_day", (date,), date, lambda x: date(x.year, x.month, x.day), "date({})")
+
+_T = TypeVar("_T")
+_Number = TypeVar("_Number", int, float)
+
+# The first value that is not None, as SQL's COALESCE, which skips only NULL, so a False still wins.
+coalesce = Function(
+    "coalesce",
+    (_T | None, ...),
+    _T,
+    lambda *values: next((v for v in values if v is not None), None),
+    "COALESCE({})",
+)
 
 # SQLite's AVG always gives a float, as `fmean` does.
-avg = Aggregate("avg", statistics.fmean, "AVG({})", arg=int | float, result=float)
+avg = Aggregate("avg", statistics.fmean, "AVG({})", arg=_Number, result=float)
 
 # The built-ins that can be used as aggregates, so users write `sum` rather than an inlay name.
 _BUILTIN_AGGREGATES: dict[object, Aggregate[Any]] = {
     len: Aggregate("len", lambda values: sum(1 for _ in values), "COUNT(*)", arg=None, result=int),
     # SQL gives NULL for no values, and Python 0.
-    sum: Aggregate("sum", sum, "coalesce(SUM({}), 0)", arg=int | float),
-    min: Aggregate("min", min, "MIN({})", arg=object),
-    max: Aggregate("max", max, "MAX({})", arg=object),
+    sum: Aggregate("sum", sum, "coalesce(SUM({}), 0)", arg=_Number, result=_Number),
+    min: Aggregate("min", min, "MIN({})", arg=_T, result=_T),
+    max: Aggregate("max", max, "MAX({})", arg=_T, result=_T),
 }
 
 

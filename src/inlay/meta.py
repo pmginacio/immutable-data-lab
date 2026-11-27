@@ -46,8 +46,7 @@ def meta(cls: type) -> EntityMeta:
 
 
 def metas(entities: Iterable[type]) -> frozendict[type, EntityMeta]:
-    # pyright's stub of frozendict declares an `__init__` with no arguments, although the constructor takes a mapping.
-    found = frozendict({m.cls: m for m in map(meta, entities)})  # pyright: ignore[reportCallIssue]
+    found = frozendict({m.cls: m for m in map(meta, entities)})
     owners: dict[str, type] = {}
     for m in found.values():
         owner = owners.setdefault(m.table, m.cls)

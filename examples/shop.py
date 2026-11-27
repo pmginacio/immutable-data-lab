@@ -204,8 +204,8 @@ def low_stock(db: Db, at_most: int) -> Query[Product]:
 
 
 def waiting_too_long(db: Db, now: datetime) -> Query[Order]:
-    # inlay: several conditions in one `filter` are combined with "and". Dates work like any other field.
-    return db[Order].filter(Order.status == Status.NEW, Order.placed < now - timedelta(days=7))
+    # inlay: dates work like any other field.
+    return db[Order].filter((Order.status == Status.NEW) & (Order.placed < now - timedelta(days=7)))
 
 
 def top_customers(db: Db, n: int) -> list[tuple[Customer, int]]:
@@ -222,7 +222,7 @@ def orders_per_month(db: Db) -> Mapping[date, int]:
 
 
 # inlay: a function of your own is written twice, in Python for plain values and in SQL for the db.
-hour = Function("hour", datetime, int, lambda x: x.hour, "CAST(strftime('%H', {}) AS INTEGER)")
+hour = Function("hour", (datetime,), int, lambda x: x.hour, "CAST(strftime('%H', {}) AS INTEGER)")
 
 
 def orders_per_hour(db: Db) -> Mapping[int, int]:

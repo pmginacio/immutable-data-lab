@@ -11,8 +11,8 @@ type ArithmeticOp = Literal["+", "-", "*", "/"]
 
 @dataclass(frozen=True)
 class Call:
-    fn: Function[Any, Any]
-    arg: Value
+    fn: Function[Any]
+    args: tuple[object, ...]  # `Value`s of the record at hand, or plain values
 
 
 @dataclass(frozen=True)
@@ -106,7 +106,7 @@ def group(source: Node, aggregate: Aggregate[Any], value: Value | None, keys: tu
     # The rows of each group are of a class of their own, so only their columns can be used on them.
     cls = type(f"groups of {record_meta(source).cls.__name__}", (), {})
     columns = [FieldMeta(cls, GROUP_KEY.format(i), result_type(k), is_key=True) for i, k in enumerate(keys)]
-    value_type = aggregate.result or result_type(value)
+    value_type = aggregate.result_type(None if value is None else result_type(value))
     columns.append(FieldMeta(cls, GROUP_VALUE, value_type, optional=True))
     return Group(source, aggregate, value, keys, EntityMeta(cls, "", tuple(columns), ()))
 
@@ -189,23 +189,19 @@ class Not(Condition):
 
 
 def all_of(*conds: Condition | bool) -> And:
-    return And(tuple(map(_as_condition, conds)))
+    return And(tuple(map(as_condition, conds)))
 
 
 def any_of(*conds: Condition | bool) -> Or:
-    return Or(tuple(map(_as_condition, conds)))
-
-
-def none_of(*conds: Condition | bool) -> Not:
-    return Not(any_of(*conds))
+    return Or(tuple(map(as_condition, conds)))
 
 
 def negate(cond: Condition | bool) -> Not:
-    return Not(_as_condition(cond))
+    return Not(as_condition(cond))
 
 
 # Type checkers see `Order.total > 100` as a `bool`, so a stray real `bool` must be caught at runtime.
-def _as_condition(value: object) -> Condition:
+def as_condition(value: object) -> Condition:
     if not isinstance(value, Condition):
         raise TypeError(f"expected a condition such as Order.total > 100, got {value!r}")
     return value
@@ -266,8 +262,8 @@ def _classes_reached(value: object) -> set[type]:
             return {r.target for r in refs if r.target is not None}
         case GroupValue(groups, at):
             return classes_read(groups).union(*map(_classes_reached, at))
-        case Call(_, arg):
-            return _classes_reached(arg)
+        case Call(_, args):
+            return set().union(*map(_classes_reached, args))
         case BinOp(_, left, right):
             return _classes_reached(left) | _classes_reached(right)
         case _:
@@ -282,10 +278,8 @@ def result_type(value: object) -> type:
     match value:
         case FieldMeta():
             return value.py_type
-        case Call(fn, arg):
-            if not issubclass(result_type(arg), fn.arg):
-                raise TypeError(f"{fn.name} needs a {fn.arg.__name__}, got {describe(arg)}")
-            return fn.result
+        case Call(fn, args):
+            return fn.result_type(tuple(result_type(a) for a in args))
         case BinOp(op, left, right):
             types = {_number_type(left), _number_type(right)}
             return float if op == "/" or float in types else int
@@ -323,8 +317,9 @@ def value_fields(value: object) -> Iterator[FieldMeta]:
             yield value
         case RefValue(refs):
             yield refs[0]
-        case Call(_, arg):
-            yield from value_fields(arg)
+        case Call(_, args):
+            for v in args:
+                yield from value_fields(v)
         case BinOp(_, left, right):
             yield from value_fields(left)
             yield from value_fields(right)
@@ -349,8 +344,8 @@ def replaced(node: Any, swaps: tuple[tuple[Value, Value], ...]) -> Any:
             return type(node)(tuple(replaced(item, swaps) for item in items))
         case Not(item):
             return Not(replaced(item, swaps))
-        case Call(fn, arg):
-            return Call(fn, replaced(arg, swaps))
+        case Call(fn, args):
+            return Call(fn, tuple(replaced(v, swaps) for v in args))
         case BinOp(op, left, right):
             return BinOp(op, replaced(left, swaps), replaced(right, swaps))
         case _:

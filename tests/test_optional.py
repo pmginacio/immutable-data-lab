@@ -7,7 +7,7 @@ import pytest
 import inlay
 import inlay.datoms
 import inlay.history
-from inlay import BrokenRef, Ref, entity, is_none, key, negate, one_of
+from inlay import BrokenRef, Ref, coalesce, entity, key, negate, one_of, projection
 
 
 @entity
@@ -55,21 +55,44 @@ def test_a_record_with_none_can_be_removed(db):
     assert db[Order].get("o3") is None
 
 
+@projection(Order)
+class Shipping:
+    id: str
+    city: str = coalesce(Order.customer.city, "unknown")
+    discount: int = coalesce(Order.discount, 0)
+
+
+def test_coalesce_gives_the_first_value_that_is_not_none(db):
+    assert (coalesce(None, 3, 4), coalesce(None, None)) == (3, None)
+    assert ids(db[Order].filter(coalesce(Order.discount, 0) == 0)) == ["o2", "o3"]
+    assert [o.id for o in db[Order].sorted(key=coalesce(Order.discount, 100))] == ["o1", "o2", "o3"]
+
+
+def test_coalesce_counts_a_field_through_an_empty_ref_as_none(db):
+    rows = {r.id: (r.city, r.discount) for r in db[Order].project(Shipping)}
+    assert rows == {"o1": ("Lisbon", 5), "o2": ("unknown", 0), "o3": ("unknown", 0)}
+    assert ids(db[Order].filter(coalesce(Order.customer.city, "unknown") == "unknown")) == ["o2", "o3"]
+
+
+def test_coalesce_refuses_values_of_two_types():
+    with pytest.raises(TypeError, match="coalesce needs values of one type"):
+        coalesce(Order.discount, "none")
+
+
 def test_a_ref_to_a_missing_record_still_raises(db):
     with pytest.raises(BrokenRef):
         db.add(Order(customer="nobody", total=1))
 
 
 def test_equality_matches_none_as_python_does(db):
-    assert ids(db[Order].filter(is_none(Order.discount))) == ["o2", "o3"]
-    assert ids(db[Order].filter(Order.discount == None)) == ["o2", "o3"]  # noqa: E711
+    assert ids(db[Order].filter(Order.discount == None)) == ["o2", "o3"]
     assert ids(db[Order].filter(Order.discount != 5)) == ["o2", "o3"]
-    assert ids(db[Order].filter(negate(is_none(Order.discount)))) == ["o1"]
+    assert ids(db[Order].filter(Order.discount != None)) == ["o1"]
 
 
 def test_an_ordering_comparison_is_false_for_none_and_its_negation_true(db):
-    assert ids(db[Order].filter(Order.discount > 1)) == ["o1"]  # pyright: ignore[reportOptionalOperand]
-    assert ids(db[Order].filter(negate(Order.discount > 1))) == ["o2", "o3"]  # pyright: ignore[reportOptionalOperand]
+    assert ids(db[Order].filter(Order.discount > 1)) == ["o1"]
+    assert ids(db[Order].filter(negate(Order.discount > 1))) == ["o2", "o3"]
 
 
 def test_one_of_can_hold_none(db):
@@ -79,8 +102,8 @@ def test_one_of_can_hold_none(db):
 def test_a_path_through_an_empty_ref_matches_nothing_and_its_negation_everything(db):
     assert ids(db[Order].filter(Order.customer.city == "Lisbon")) == ["o1"]
     assert ids(db[Order].filter(negate(Order.customer.city == "Lisbon"))) == ["o2", "o3"]
-    assert ids(db[Order].filter(is_none(Order.customer.city))) == ["o2"]
-    assert ids(db[Order].filter(is_none(Order.customer))) == ["o3"]
+    assert ids(db[Order].filter(Order.customer.city == None)) == ["o2"]
+    assert ids(db[Order].filter(Order.customer == None)) == ["o3"]
 
 
 def test_none_sorts_first_and_last_in_reverse(db):

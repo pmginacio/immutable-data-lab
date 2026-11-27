@@ -20,7 +20,6 @@ from inlay import (
     key,
     query,
     negate,
-    none_of,
     one_of,
     projection,
 )
@@ -97,7 +96,6 @@ def _conditions() -> None:
     all_of(Order.total > 100, Order.customer.city == "Lisbon")
     any_of(contains(Customer.name, "x"), Customer.name.startswith("A"))
     negate(one_of(Order.total, (1, 2)))
-    none_of(Order.customer == ana.id)
     assert_type((Order.total > 1) | (Order.total == 0), bool)
     assert_type(contains(Customer.name, "x") & (Order.total > 1), And)
 
