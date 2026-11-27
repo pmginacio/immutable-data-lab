@@ -1,4 +1,4 @@
-from inlay import Ref, entity, key
+from inlay import Field, Ref, entity, key
 from inlay.history.sql import create_table_sql, indexes_sql
 from inlay.meta import meta
 
@@ -7,15 +7,15 @@ CURRENT = "9223372036854775807"
 
 @entity
 class Customer:
-    id: str = key()
-    name: str
+    id: Field[str] = key()
+    name: Field[str]
 
 
 @entity(indexes=[("customer",), ("total",)])
 class Order:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
-    total: int
+    total: Field[int]
 
 
 def test_a_table_holds_versions_and_live_columns_for_the_key_and_references():

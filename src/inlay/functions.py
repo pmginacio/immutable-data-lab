@@ -4,7 +4,10 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import date
 from types import NoneType
-from typing import Any, Protocol, TypeVar, cast, get_args, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast, get_args, overload, runtime_checkable
+
+if TYPE_CHECKING:
+    from inlay.conditions import Expr
 
 
 @runtime_checkable
@@ -35,9 +38,14 @@ class Function[R]:
     python: Callable[..., R]
     sql: str
 
-    def __call__(self, *args: object) -> R:
+    # Given a field first, it is a value for queries, such as `to_month(Order.placed)`; given plain values, it is computed.
+    @overload
+    def __call__(self, first: Expr[Any], /, *rest: object) -> Expr[R]: ...
+    @overload
+    def __call__(self, *args: object) -> R: ...
+    def __call__(self, *args: object) -> Any:
         if applicable := next((a for a in args if isinstance(a, Applicable)), None):
-            return cast(R, applicable._apply(self, args))
+            return applicable._apply(self, args)
         self.result_type(tuple(type(a) for a in args))
         return self.python(*args)
 

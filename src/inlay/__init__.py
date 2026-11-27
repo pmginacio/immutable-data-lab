@@ -1,4 +1,4 @@
-from inlay.conditions import contains, one_of
+from inlay.conditions import Field, contains, one_of
 from inlay.db import (
     AlreadyExists,
     BrokenRef,
@@ -12,7 +12,7 @@ from inlay.db import (
     open,
     query,
 )
-from inlay.entity import Ref, entity, hashed, key, projection
+from inlay.entity import Ref, default, entity, hashed, key, projection
 from inlay.functions import Aggregate, Function, avg, coalesce, to_day, to_month
 from inlay.nodes import Condition, all_of, any_of, negate
 
@@ -22,6 +22,7 @@ __all__ = [
     "BrokenRef",
     "Condition",
     "Db",
+    "Field",
     "Function",
     "Grouped",
     "Missing",
@@ -35,6 +36,7 @@ __all__ = [
     "avg",
     "coalesce",
     "contains",
+    "default",
     "entity",
     "hashed",
     "key",

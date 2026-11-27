@@ -8,39 +8,39 @@ from helpers import opened
 import inlay
 import inlay.datoms
 import inlay.history
-from inlay import AlreadyExists, BrokenRef, Missing, Ref, entity, key
+from inlay import AlreadyExists, BrokenRef, Field, Missing, Ref, entity, key
 
 
 @entity
 class Customer:
-    id: str = key()
-    name: str
+    id: Field[str] = key()
+    name: Field[str]
 
 
 @entity(indexes=[("customer",)])
 class Order:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
-    total: int
+    total: Field[int]
 
 
 @entity(indexes=[("parent",)])
 class Category:
-    id: str = key()
+    id: Field[str] = key()
     parent: Ref[Category]
-    name: str
+    name: Field[str]
 
 
 @entity
 class Everything:
-    id: str = key()
-    i: int
-    f: float
-    s: str
-    b: bytes
-    flag: bool
-    at: datetime
-    day: date
+    id: Field[str] = key()
+    i: Field[int]
+    f: Field[float]
+    s: Field[str]
+    b: Field[bytes]
+    flag: Field[bool]
+    at: Field[datetime]
+    day: Field[date]
 
 
 # Every write test also runs against the history experiments, which must behave the same for the current data.
@@ -268,7 +268,7 @@ def test_failed_call_inside_a_transaction_writes_nothing(db):
 def test_reading_or_writing_a_class_with_no_table_raises(db):
     @entity
     class Other:
-        id: str = key()
+        id: Field[str] = key()
 
     with pytest.raises(KeyError, match="Other"):
         db[Other]

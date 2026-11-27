@@ -6,27 +6,27 @@ from helpers import opened
 import inlay
 import inlay.datoms
 import inlay.history
-from inlay import Ref, entity, key
+from inlay import Field, Ref, entity, key
 
 
 @entity(indexes=[("city",)])
 class Customer:
-    id: str = key()
-    name: str
-    city: str
+    id: Field[str] = key()
+    name: Field[str]
+    city: Field[str]
 
 
 @entity(indexes=[("customer",)])
 class Order:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
-    total: int
+    total: Field[int]
 
 
 @entity
 class Event:
-    id: str = key()
-    name: str
+    id: Field[str] = key()
+    name: Field[str]
 
 
 ANA = Customer(id="ana", name="Ana", city="Lisbon")

@@ -17,7 +17,7 @@ from enum import StrEnum
 from pathlib import Path
 
 import inlay
-from inlay import AlreadyExists, Db, Function, Query, Ref, entity, key, one_of, projection, query, to_month
+from inlay import AlreadyExists, Db, Field, Function, Query, Ref, entity, default, key, one_of, projection, query, to_month
 
 # ---------------------------------------------------------------------------
 # 1. The data
@@ -39,18 +39,18 @@ class Status(StrEnum):
 # A class can refer to itself.
 @entity(indexes=[("city",), ("referred_by",)])
 class Customer:
-    id: str = key()  # the email address: the app can choose the key
-    name: str
-    city: str
+    id: Field[str] = key()  # the email address: the app can choose the key
+    name: Field[str]
+    city: Field[str]
     referred_by: Ref[Customer, str | None]
 
 
 @entity(indexes=[("stock",)])
 class Product:
-    id: str = key()
-    name: str
-    price: int  # in cents
-    stock: int
+    id: Field[str] = key()
+    name: Field[str]
+    price: Field[int]  # in cents
+    stock: Field[int]
 
 
 # inlay: `Ref[Customer]` is stored as the customer's key. On a record, `order.customer` is a plain `str`.
@@ -58,21 +58,21 @@ class Product:
 # inlay: a `Ref` must be the first field of an index, so queries through it do not scan the table.
 @entity(indexes=[("customer",), ("status",), ("placed",)])
 class Order:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
-    status: Status
-    placed: datetime
-    total: int  # worked out when the order is placed
-    paid: datetime | None = None
+    status: Field[Status]
+    placed: Field[datetime]
+    total: Field[int]  # worked out when the order is placed
+    paid: Field[datetime | None] = default(None)
 
 
 @entity(indexes=[("order",), ("product",)])
 class OrderLine:
-    id: str = key()
+    id: Field[str] = key()
     order: Ref[Order]
     product: Ref[Product]
-    qty: int
-    unit_price: int  # copied from the product, so a later price change does not touch old orders
+    qty: Field[int]
+    unit_price: Field[int]  # copied from the product, so a later price change does not touch old orders
 
 
 # ---------------------------------------------------------------------------
@@ -239,12 +239,12 @@ def revenue_from_referrals(db: Db, customer_id: str) -> int:
 # inlay: a field can be the value of the record's group, here what its customer spent; None for a key with no group.
 @projection(Order)
 class OrderRow:
-    id: str
-    placed: datetime
-    total: int
-    customer_name: str = Order.customer.name
-    city: str = Order.customer.city
-    customer_spent: int | None = spent[Order.customer]
+    id: Field[str]
+    placed: Field[datetime]
+    total: Field[int]
+    customer_name: Field[str] = Order.customer.name
+    city: Field[str] = Order.customer.city
+    customer_spent: Field[int | None] = spent[Order.customer]
 
 
 def latest_paid(db: Db, city: str | None = None) -> Query[OrderRow]:

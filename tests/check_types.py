@@ -4,9 +4,11 @@ Each `# type: ignore` marks an expected error; pyright reports any that is no lo
 """
 
 from dataclasses import replace
+from datetime import date
 from typing import Any, assert_type
 
 from inlay import (
+    Field,
     Db,
     Grouped,
     Query,
@@ -16,39 +18,49 @@ from inlay import (
     any_of,
     avg,
     contains,
+    default,
     entity,
     key,
     query,
     negate,
     one_of,
     projection,
+    to_month,
 )
-from inlay.nodes import And
+from inlay.conditions import Expr
+from inlay.nodes import And, Condition, Or
 
 
 @entity(indexes=[("city",)])
 class Customer:
-    id: str = key()
-    name: str
-    city: str
+    id: Field[str] = key()
+    name: Field[str]
+    city: Field[str]
 
 
 @entity(indexes=[("customer",)])
 class Order:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
-    total: int
+    total: Field[int]
+    placed: Field[date]
+    discount: Field[int | None] = default(None)
 
 
 ana = Customer(name="Ana", city="Lisbon")
-o = Order(customer=ana.id, total=120)
+o = Order(customer=ana.id, total=120, placed=date(2026, 1, 1))
 Customer(name="Bob", city="Porto", id="c1")
 
 assert_type(o.id, str)
 assert_type(o.customer, str)
 assert_type(o.total, int)
+assert_type(o.discount, int | None)
+assert_type(Order.total, Expr[int])
+assert_type(Order.discount, Expr[int | None])
 assert_type(Order.customer, type[Customer])
-assert_type(Order.customer.city, str)
+assert_type(Order.customer.city, Expr[str])
+assert_type(to_month(Order.placed), Expr[date])
+assert_type(to_month(date(2026, 1, 5)), date)
 assert_type(replace(o, total=150), Order)
 
 
@@ -81,22 +93,22 @@ def _tables(db: Db) -> None:
     assert_type(db[big.aggregate_by(Order.total, len)], Grouped[int, int])
     by_customer = big.aggregate_by(Order.customer, len)
     assert_type(by_customer, Grouped[str, int])
-    assert_type(by_customer[Customer.id], int)
-    assert_type(by_customer[Order.customer], int)
+    assert_type(by_customer[Customer.id], Expr[int | None])
+    assert_type(by_customer[Order.customer], Expr[int | None])
 
 
 @projection(Order)
 class OrderRow:
-    id: str
-    city: str = Order.customer.city
+    id: Field[str]
+    city: Field[str] = Order.customer.city
 
 
 def _conditions() -> None:
-    assert_type(Order.total > 100, bool)
+    assert_type(Order.total > 100, Condition)
     all_of(Order.total > 100, Order.customer.city == "Lisbon")
     any_of(contains(Customer.name, "x"), Customer.name.startswith("A"))
     negate(one_of(Order.total, (1, 2)))
-    assert_type((Order.total > 1) | (Order.total == 0), bool)
+    assert_type((Order.total > 1) | (Order.total == 0), Or)
     assert_type(contains(Customer.name, "x") & (Order.total > 1), And)
 
 
@@ -104,7 +116,8 @@ def _expected_errors() -> None:
     contains(Order.total, "x")  # type: ignore
     Customer("Ana", "Lisbon")  # type: ignore
     Customer(name="Ana")  # type: ignore
-    Order(customer=5, total=120)  # type: ignore
+    Order(customer=5, total=120, placed=date(2026, 1, 1))  # type: ignore
+    Order(customer=ana.id, total="120", placed=date(2026, 1, 1))  # type: ignore
     o.total = 3  # type: ignore
     Order.totl  # type: ignore
     Order.customer.nmae  # type: ignore

@@ -6,14 +6,14 @@ from datetime import UTC, datetime, timedelta, timezone
 import pytest
 
 import inlay
-from inlay import Ref, entity, hashed
+from inlay import Field, Ref, entity, default, hashed
 
 
 @entity
 class Place:
-    id: str = hashed()
-    town: str
-    seen: datetime | None = None
+    id: Field[str] = hashed()
+    town: Field[str]
+    seen: Field[datetime | None] = default(None)
 
     def __post_init__(self) -> None:
         if not self.town:
@@ -22,8 +22,8 @@ class Place:
 
 @entity(indexes=[("place",)])
 class Listing:
-    id: str = hashed()
-    price: int
+    id: Field[str] = hashed()
+    price: Field[int]
     place: Ref[Place]
 
 

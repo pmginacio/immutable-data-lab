@@ -7,22 +7,22 @@ import pytest
 import inlay
 import inlay.datoms
 import inlay.history
-from inlay import BrokenRef, Ref, coalesce, entity, key, negate, one_of, projection
+from inlay import BrokenRef, Field, Ref, coalesce, entity, default, key, negate, one_of, projection
 
 
 @entity
 class Customer:
-    id: str = key()
-    city: str | None
+    id: Field[str] = key()
+    city: Field[str | None]
 
 
 @entity(indexes=[("customer",)])
 class Order:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer, str | None]
-    total: int
-    discount: int | None = None
-    paid: datetime | None = None
+    total: Field[int]
+    discount: Field[int | None] = default(None)
+    paid: Field[datetime | None] = default(None)
 
 
 ANA = Customer(id="ana", city="Lisbon")
@@ -57,9 +57,9 @@ def test_a_record_with_none_can_be_removed(db):
 
 @projection(Order)
 class Shipping:
-    id: str
-    city: str = coalesce(Order.customer.city, "unknown")
-    discount: int = coalesce(Order.discount, 0)
+    id: Field[str]
+    city: Field[str] = coalesce(Order.customer.city, "unknown")
+    discount: Field[int] = coalesce(Order.discount, 0)
 
 
 def test_coalesce_gives_the_first_value_that_is_not_none(db):
@@ -128,7 +128,7 @@ def test_the_key_cannot_be_optional():
 
         @entity
         class Thing:
-            id: str | None = key()
+            id: Field[str | None] = key()
 
 
 def test_other_unions_are_refused():
@@ -136,14 +136,14 @@ def test_other_unions_are_refused():
 
         @entity
         class Thing:
-            id: str = key()
-            amount: int | str
+            id: Field[str] = key()
+            amount: Field[int | str]
 
-    with pytest.raises(TypeError, match="unsupported type"):
+    with pytest.raises(TypeError, match=r"declare it as Field\[...\], or Ref\[...\]"):
 
         @entity
         class Other:
-            id: str = key()
+            id: Field[str] = key()
             customer: Ref[Customer] | None
 
 

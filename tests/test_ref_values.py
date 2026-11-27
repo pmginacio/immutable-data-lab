@@ -6,29 +6,29 @@ from helpers import opened
 import inlay
 import inlay.datoms
 import inlay.history
-from inlay import Ref, entity, key
+from inlay import Field, Ref, entity, key
 
 
 @entity(indexes=[("referred_by",)])
 class Customer:
-    id: str = key()
-    name: str
-    city: str
+    id: Field[str] = key()
+    name: Field[str]
+    city: Field[str]
     referred_by: Ref[Customer, str | None]
 
 
 @entity(indexes=[("customer",)])
 class Order:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
-    total: int
+    total: Field[int]
 
 
 @entity(indexes=[("order",)])
 class Line:
-    id: str = key()
+    id: Field[str] = key()
     order: Ref[Order]
-    qty: int
+    qty: Field[int]
 
 
 RECORDS = [
@@ -83,14 +83,14 @@ def test_the_paused_history_experiments_refuse_them(open_db, tmp_path):
     # The experiments refuse optional fields too, so they get classes without one.
     @entity
     class Client:
-        id: str = key()
-        name: str
+        id: Field[str] = key()
+        name: Field[str]
 
     @entity(indexes=[("customer",)])
     class Purchase:
-        id: str = key()
+        id: Field[str] = key()
         customer: Ref[Client]
-        total: int
+        total: Field[int]
 
     with opened(open_db, [Client, Purchase], tmp_path / "experiment.db") as db:
         with pytest.raises(TypeError, match="Purchase.customer.name"):

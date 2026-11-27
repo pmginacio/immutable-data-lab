@@ -5,28 +5,28 @@ import pytest
 
 import inlay
 import inlay.history
-from inlay import BrokenRef, Ref, SchemaMismatch, entity, key
+from inlay import BrokenRef, Field, Ref, SchemaMismatch, entity, key
 
 
 @entity(indexes=[("city", "name")])
 class Customer:
-    id: str = key()
-    name: str
-    city: str
+    id: Field[str] = key()
+    name: Field[str]
+    city: Field[str]
 
 
 @entity(indexes=[("customer",), ("total",)])
 class Order:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
-    total: int
+    total: Field[int]
 
 
 @entity(indexes=[("parent",)])
 class Category:
-    id: str = key()
+    id: Field[str] = key()
     parent: Ref[Category]
-    name: str
+    name: Field[str]
 
 
 def schema(path) -> dict[str, str]:
@@ -106,13 +106,13 @@ def test_register_needs_the_targets_of_refs_first_or_in_the_same_call(open_db, p
 
 @entity(indexes=[("manager",)])
 class Department:
-    id: str = key()
+    id: Field[str] = key()
     manager: Ref[Employee]
 
 
 @entity(indexes=[("department",)])
 class Employee:
-    id: str = key()
+    id: Field[str] = key()
     department: Ref[Department]
 
 
@@ -126,7 +126,7 @@ def test_classes_that_point_to_each_other_are_registered_in_one_call(open_db, pa
 def another_order() -> type:
     @entity
     class Order:
-        id: str = key()
+        id: Field[str] = key()
 
     return Order
 
@@ -139,7 +139,7 @@ def test_two_classes_with_the_same_table_raise(open_db, path):
 def test_a_changed_class_raises_on_first_use(open_db, path):
     with open_db(path) as db:
         db.register(Customer)
-    renamed_field = entity(type("Customer", (), {"__annotations__": {"id": str, "full_name": str}, "id": key()}))
+    renamed_field = entity(type("Customer", (), {"__annotations__": {"id": Field[str], "full_name": Field[str]}, "id": key()}))
     with open_db(path) as db:
         assert renamed_field in db
         with pytest.raises(SchemaMismatch, match="table 'customer' does not match its entity"):
@@ -173,7 +173,7 @@ def test_the_indexes_follow_the_class_on_first_use(open_db, path):
     with open_db(path) as db:
         db.register(Customer)
     fewer = entity(indexes=[])(
-        type("Customer", (), {"__annotations__": {"id": str, "name": str, "city": str}, "id": key()})
+        type("Customer", (), {"__annotations__": {"id": Field[str], "name": Field[str], "city": Field[str]}, "id": key()})
     )
     with open_db(path) as db:
         db[fewer]

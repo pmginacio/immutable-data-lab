@@ -5,31 +5,31 @@ from datetime import UTC, date, datetime
 import pytest
 
 import inlay
-from inlay import Ref, entity, key, projection, query, to_month
+from inlay import Field, Ref, entity, key, projection, query, to_month
 
 
 @entity
 class Customer:
-    id: str = key()
-    name: str
-    city: str
+    id: Field[str] = key()
+    name: Field[str]
+    city: Field[str]
 
 
 @entity(indexes=[("customer",)])
 class Order:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer, str | None]
-    total: int
-    placed: datetime
+    total: Field[int]
+    placed: Field[datetime]
 
 
 @projection(Order)
 class OrderRow:
-    id: str
-    total: int
-    city: str | None = Order.customer.city
-    month: date = to_month(Order.placed)
-    with_tax: float = Order.total * 1.25
+    id: Field[str]
+    total: Field[int]
+    city: Field[str | None] = Order.customer.city
+    month: Field[date] = to_month(Order.placed)
+    with_tax: Field[float] = Order.total * 1.25
 
 
 first_orders = query(Order).aggregate_by(Order.customer, min, Order.placed)
@@ -37,8 +37,8 @@ first_orders = query(Order).aggregate_by(Order.customer, min, Order.placed)
 
 @projection(Order)
 class OrderWithFirst:
-    id: str
-    customers_first: datetime | None = first_orders[Order.customer]
+    id: Field[str]
+    customers_first: Field[datetime | None] = first_orders[Order.customer]
 
 
 RECORDS = [
@@ -129,7 +129,7 @@ def test_it_needs_the_key_of_the_root():
 
         @projection(Order)
         class NoKey:
-            total: int
+            total: Field[int]
 
 
 def test_a_field_not_on_the_root_needs_a_value():
@@ -137,21 +137,21 @@ def test_a_field_not_on_the_root_needs_a_value():
 
         @projection(Order)
         class Unknown:
-            id: str
-            name: str
+            id: Field[str]
+            name: Field[str]
 
 
 @pytest.mark.parametrize(
     "hint, value, message",
     [
-        (int, Order.customer.name, "typed <class 'int'>, but its value is a str | None"),
-        (str, Order.customer.name, "typed <class 'str'>, but its value is a str | None"),
-        (int | None, Order.total, r"typed int \| None, but its value is a int"),
+        (int, Order.customer.name, r"declared Field\[int\], but its value is a str \| None"),
+        (str, Order.customer.name, r"declared Field\[str\], but its value is a str \| None"),
+        (int | None, Order.total, r"declared Field\[int \| None\], but its value is a int"),
     ],
 )
 def test_each_field_is_typed_as_its_value(hint, value, message):
     with pytest.raises(TypeError, match=message):
-        projection(Order)(type("Wrong", (), {"__annotations__": {"id": str, "x": hint}, "x": value}))
+        projection(Order)(type("Wrong", (), {"__annotations__": {"id": Field[str], "x": Field[hint]}, "x": value}))
 
 
 def test_values_come_from_the_root():
@@ -159,5 +159,5 @@ def test_values_come_from_the_root():
 
         @projection(Order)
         class Other:
-            id: str
-            name: str = Customer.name
+            id: Field[str]
+            name: Field[str] = Customer.name

@@ -7,7 +7,7 @@ from dataclasses import replace
 import pytest
 
 import inlay.datoms
-from inlay import Ref, entity, key
+from inlay import Field, Ref, entity, key
 from inlay.datoms.sql import CREATE_SNAPSHOTS, delete_by_key_sql, select_sql
 from inlay.meta import meta
 from inlay.nodes import Compare, Filter, Table
@@ -15,15 +15,15 @@ from inlay.nodes import Compare, Filter, Table
 
 @entity
 class Customer:
-    id: str = key()
-    name: str
+    id: Field[str] = key()
+    name: Field[str]
 
 
 @entity(indexes=[("customer",)])
 class Order:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
-    total: int
+    total: Field[int]
 
 
 ANA = Customer(id="ana", name="Ana")
@@ -123,7 +123,7 @@ def test_the_current_table_holds_the_newest_datom_of_each_field(db, path):
 def another_order() -> type:
     @entity
     class Order:
-        id: str = key()
+        id: Field[str] = key()
 
     return Order
 

@@ -3,27 +3,27 @@ import sqlite3
 import pytest
 
 import inlay
-from inlay import Ref, SchemaMismatch, entity, key
+from inlay import Field, Ref, SchemaMismatch, entity, key
 
 
 @entity
 class Customer:
-    id: str = key()
-    name: str
+    id: Field[str] = key()
+    name: Field[str]
 
 
 @entity(indexes=[("customer",)])
 class Order:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
-    total: int
+    total: Field[int]
 
 
 @entity(indexes=[("customer",)])
 class Purchase:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
-    total: int
+    total: Field[int]
 
 
 def order_line(order_class: type) -> type:
@@ -31,7 +31,7 @@ def order_line(order_class: type) -> type:
 
     @entity(indexes=[("order",)])
     class OrderLine:
-        id: str = key()
+        id: Field[str] = key()
         order: Ref[order_class]
 
     return OrderLine
@@ -39,9 +39,9 @@ def order_line(order_class: type) -> type:
 
 @entity(indexes=[("customer",)])
 class OrderLegacy:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
-    total: int
+    total: Field[int]
 
 
 OrderLine = order_line(Order)
@@ -104,10 +104,10 @@ def test_rename_onto_an_existing_table_fails_and_changes_nothing(path):
 def test_the_renamed_table_must_match_the_new_class(path):
     @entity(indexes=[("customer",)])
     class Purchase:
-        id: str = key()
+        id: Field[str] = key()
         customer: Ref[Customer]
-        total: int
-        discount: int
+        total: Field[int]
+        discount: Field[int]
 
     with pytest.raises(SchemaMismatch, match="'purchase' does not match"):
         rename(path, "Order", Purchase)
@@ -118,17 +118,17 @@ def test_the_renamed_table_must_match_the_new_class(path):
 def test_migrate_and_rename_in_one_transaction(path):
     @entity(indexes=[("customer",)])
     class Order:
-        id: str = key()
+        id: Field[str] = key()
         customer: Ref[Customer]
-        total: int
-        discount: int
+        total: Field[int]
+        discount: Field[int]
 
     @entity(indexes=[("customer",)])
     class Purchase:
-        id: str = key()
+        id: Field[str] = key()
         customer: Ref[Customer]
-        total: int
-        discount: int
+        total: Field[int]
+        discount: Field[int]
 
     def add_discount(db):
         db.add(*(Order(id=o.id, customer=o.customer, total=o.total, discount=0) for o in db[OrderLegacy]))

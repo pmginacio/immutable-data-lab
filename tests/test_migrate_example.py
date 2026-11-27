@@ -1,13 +1,13 @@
 """The migration shown in the README: a new field computed from the records of another class."""
 
 import inlay
-from inlay import Db, Ref, entity, key
+from inlay import Db, Field, Ref, entity, key
 
 
 @entity
 class Customer:
-    id: str = key()
-    name: str
+    id: Field[str] = key()
+    name: Field[str]
 
 
 def before() -> tuple[type, type]:
@@ -15,15 +15,15 @@ def before() -> tuple[type, type]:
 
     @entity(indexes=[("customer",)])
     class Order:
-        id: str = key()
+        id: Field[str] = key()
         customer: Ref[Customer]
 
     @entity(indexes=[("order",)])
     class LineItem:
-        id: str = key()
+        id: Field[str] = key()
         order: Ref[Order]
-        price: int
-        qty: int
+        price: Field[int]
+        qty: Field[int]
 
     return Order, LineItem
 
@@ -33,23 +33,23 @@ OrderBefore, LineItemBefore = before()
 
 @entity(indexes=[("customer",)])
 class OrderLegacy:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
 
 
 @entity(indexes=[("customer",)])
 class Order:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
-    total_amount: int
+    total_amount: Field[int]
 
 
 @entity(indexes=[("order",)])
 class LineItem:
-    id: str = key()
+    id: Field[str] = key()
     order: Ref[Order]
-    price: int
-    qty: int
+    price: Field[int]
+    qty: Field[int]
 
 
 def add_total_amount(db: Db) -> None:

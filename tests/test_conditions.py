@@ -3,30 +3,30 @@ from datetime import date, datetime
 
 import pytest
 
-from inlay import Ref, all_of, any_of, contains, entity, key, negate, one_of, to_day, to_month
+from inlay import Field, Ref, all_of, any_of, contains, entity, key, negate, one_of, to_day, to_month
 from inlay.meta import FieldMeta, meta
 from inlay.nodes import And, BinOp, Call, Compare, Filter, In, Match, Not, Or, Table, check_condition
 
 
 @entity(indexes=[("city",)])
 class Customer:
-    id: str = key()
-    name: str
-    city: str
+    id: Field[str] = key()
+    name: Field[str]
+    city: Field[str]
 
 
 @entity(indexes=[("customer",)])
 class Order:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
-    total: int
-    discount: int
-    placed: datetime
+    total: Field[int]
+    discount: Field[int]
+    placed: Field[datetime]
 
 
 @entity(indexes=[("order",)])
 class OrderLine:
-    id: str = key()
+    id: Field[str] = key()
     order: Ref[Order]
 
 

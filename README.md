@@ -150,21 +150,21 @@ Classes are flat and immutable, and records are read and written without any SQL
 from dataclasses import replace
 
 import inlay
-from inlay import Ref, entity, key
+from inlay import Field, Ref, entity, key
 
 
 @entity(indexes=[("city",)])
 class Customer:
-    id: str = key()
-    name: str
-    city: str
+    id: Field[str] = key()
+    name: Field[str]
+    city: Field[str]
 
 
 @entity(indexes=[("customer",), ("total",)])
 class Order:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
-    total: int
+    total: Field[int]
 
 
 # Opens the file: .inlay.db in the current directory, or the one given, as in inlay.open("shop.db").
@@ -205,6 +205,10 @@ with inlay.open() as db:
         db[Customer].delete(ana.id)
 ```
 
+Each field is declared `Field[...]`: on a record `order.total` is the stored `int`, and on the class `Order.total` is a value for queries, so `Order.total > 100` is a condition.
+Type checkers see both readings, so they check the queries as they check the records.
+A default is written `default(...)`, as in `discount: Field[int | None] = default(None)`, since type checkers would check a plain `= None` against `Field[...]`.
+
 `Cls in db` tells whether a class has a table, and `del db[Cls]` drops it with its records, unless another table still points to it.
 Several processes that start on a new file at once check and register inside `db.transaction()`, which takes the write lock first, so only one of them creates the tables.
 
@@ -213,14 +217,14 @@ Several processes that start on a new file at once check and register inside `db
 A field typed `X | None` can hold `None`, and an optional reference is written `Ref[Customer, str | None]`.
 
 ```python
-from inlay import coalesce, negate
+from inlay import coalesce, default, negate
 
 @entity(indexes=[("customer",)])
 class Order:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer, str | None]
-    total: int
-    discount: int | None = None
+    total: Field[int]
+    discount: Field[int | None] = default(None)
 
 orders = db[Order]
 orders.filter(Order.discount == None)          # the orders with no discount
@@ -239,8 +243,7 @@ Conditions follow Python, so `==` and `!=` treat `None` as a value, and a condit
 Sorting puts `None` first, and last in reverse.
 `sum`, `min`, `max` and `avg` skip `None`, and `aggregate_by` groups the records with `None` under the key `None`.
 The key cannot be optional, and other unions, such as `int | str`, are refused.
-Type checkers flag ordering comparisons on an optional field, such as `Order.discount > 1`, because `None > 1` is an error in Python.
-They also flag `= None` as the default of an optional reference, so it is passed explicitly.
+An optional reference takes a default the same way, `customer: Ref[Customer, str | None] = default(None)`.
 
 ### Enums
 
@@ -255,8 +258,8 @@ class Status(StrEnum):
 
 @entity
 class Invoice:
-    id: str = key()
-    status: Status
+    id: Field[str] = key()
+    status: Field[Status]
 
 db[Invoice].filter(Invoice.status == Status.PAID)
 db[Invoice].aggregate_by(Invoice.status, len)  # {Status.OPEN: 3, Status.PAID: 12}
@@ -276,9 +279,9 @@ from inlay import hashed
 
 @entity
 class Address:
-    id: str = hashed()
-    street: str
-    town: str
+    id: Field[str] = hashed()
+    street: Field[str]
+    town: Field[str]
 
 Address(street="Rua do Sol", town="Faro").id == Address(street="Rua do Sol", town="Faro").id  # True
 ```
@@ -400,11 +403,11 @@ from inlay import projection
 
 @projection(Order)
 class OrderRow:
-    id: str                              # named as a field of Order, so it takes it
-    total: int
-    name: str = Order.customer.name      # any other field is given its value
-    city: str = Order.customer.city
-    with_tax: float = Order.total * 1.25
+    id: Field[str]                              # named as a field of Order, so it takes it
+    total: Field[int]
+    name: Field[str] = Order.customer.name      # any other field is given its value
+    city: Field[str] = Order.customer.city
+    with_tax: Field[float] = Order.total * 1.25
 
 rows = db[Order].filter(Order.total > 100).project(OrderRow)
 rows.filter(OrderRow.city == "Lisbon").sorted(key=OrderRow.name)[:50]
@@ -424,9 +427,9 @@ biggest = query(Order).aggregate_by(Order.customer, max, Order.total)
 
 @projection(Order)
 class OrderWithBiggest:
-    id: str
-    total: int
-    customers_biggest: int | None = biggest[Order.customer]
+    id: Field[str]
+    total: Field[int]
+    customers_biggest: Field[int | None] = biggest[Order.customer]
 ```
 
 Its value is `None` for a key with no group, so the field is optional.
@@ -446,15 +449,15 @@ Before: an order has no `total_amount` yet.
 ```python
 @entity(indexes=[("customer",)])
 class Order:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
 
 @entity(indexes=[("order",)])
 class LineItem:
-    id: str = key()
+    id: Field[str] = key()
     order: Ref[Order]
-    price: int
-    qty: int
+    price: Field[int]
+    qty: Field[int]
 
 with inlay.open() as db:    # the table "order" has the columns id, customer
     ...
@@ -466,14 +469,14 @@ While: the old `Order` stays in the code under another name, because it describe
 ```python
 @entity(indexes=[("customer",)])
 class Order:                   # the new shape
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
-    total_amount: int
+    total_amount: Field[int]
 
 # ---- migration: delete all of this once it has run ----
 @entity(indexes=[("customer",)])
 class OrderLegacy:             # the old class, renamed
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
 
 def add_total_amount(db: Db) -> None:
@@ -494,9 +497,9 @@ After: once the migration has run, everything between the two markers is deleted
 ```python
 @entity(indexes=[("customer",)])
 class Order:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
-    total_amount: int
+    total_amount: Field[int]
 
 with inlay.open() as db:    # the table "order" has the columns id, customer, total_amount
     ...

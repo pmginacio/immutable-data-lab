@@ -3,11 +3,12 @@ import json
 import uuid
 from annotationlib import Format, get_annotations
 from collections.abc import Callable, Sequence
-from dataclasses import Field, dataclass, field, fields
+import dataclasses
+from dataclasses import dataclass, fields
 from types import NoneType, UnionType
 from typing import Any, dataclass_transform, get_args, get_origin, overload
 
-from inlay.conditions import Expr, own_value
+from inlay.conditions import Expr, Field, own_value
 from inlay.meta import EntityMeta, FieldMeta, meta, table_name
 from inlay.nodes import BinOp, Call, GroupValue, Projection, RefValue, Value, result_type
 from inlay.types import sql_type, to_sql
@@ -19,12 +20,21 @@ _EXPR_METHODS = {name for name in vars(Expr) if not name.startswith("__")}
 
 
 def key() -> Any:
-    return field(default_factory=lambda: str(uuid.uuid7()), metadata={_KEY: True})
+    return dataclasses.field(default_factory=lambda: str(uuid.uuid7()), metadata={_KEY: True})
+
+
+def default(value: Any) -> Any:
+    """The default of a field, as `discount: Field[int | None] = default(None)`.
+
+    A plain `= None` would be checked against `Field[...]`, which type checkers refuse. Typed as returning
+    anything, as `key()` is, it passes, so checkers do not check the value against the field's type.
+    """
+    return dataclasses.field(default=value)
 
 
 def hashed() -> Any:
     """A key computed from the other fields when the record is built, so records with the same values have the same key."""
-    return field(init=False, metadata={_KEY: True, _HASHED: True})
+    return dataclasses.field(init=False, metadata={_KEY: True, _HASHED: True})
 
 
 def restored(cls: type, values: dict[str, object]) -> Any:
@@ -57,20 +67,6 @@ class Ref[T, V = str]:
         raise NotImplementedError
 
 
-class _Field:
-    """An `Expr` for the field on the class.
-
-    A record keeps its values in its own `__dict__`. Python reads that before a descriptor without `__set__`,
-    so reading a field on a record never calls this.
-    """
-
-    def __init__(self, meta: FieldMeta) -> None:
-        self._meta = meta
-
-    def __get__(self, obj: object, owner: type | None = None) -> Any:
-        return Expr((), self._meta)
-
-
 @overload
 def entity[C](cls: type[C], /) -> type[C]: ...
 @overload
@@ -84,7 +80,7 @@ def entity(cls: type | None = None, /, *, indexes: Sequence[tuple[str, ...]] = (
 
 
 def _make_entity(cls: type, indexes: tuple[tuple[str, ...], ...]) -> type:
-    if any(isinstance(v, Field) and v.metadata.get(_HASHED) for v in vars(cls).values()):
+    if any(isinstance(v, dataclasses.Field) and v.metadata.get(_HASHED) for v in vars(cls).values()):
         _hash_key_on_init(cls)
     new = dataclass(frozen=True, kw_only=True)(cls)
     m = _entity_meta(new, indexes)
@@ -154,7 +150,7 @@ def _with_fields(cls: type, attribute: str, description: object, m: EntityMeta) 
     """`cls` with `description` stored as `attribute`, and each field of `m` an `Expr` on the class."""
     setattr(cls, attribute, description)
     for f in m.fields:
-        setattr(cls, f.name, _Field(f))
+        setattr(cls, f.name, Field(f))
     return cls
 
 
@@ -177,10 +173,12 @@ def _projected(owner: type, root: EntityMeta, name: str, hint: Any, values: dict
         value = root.field(name)
     else:
         raise TypeError(f"{owner.__name__}.{name} is not a field of {root.cls.__name__}, so it needs a value")
-    py_type, optional = _without_none(hint)
+    declared = _declared(owner, name, hint)
+    py_type, optional = _without_none(declared)
     if (py_type, optional) != (result_type(value), _may_be_none(value)):
         expected = result_type(value).__name__ + (" | None" if _may_be_none(value) else "")
-        raise TypeError(f"{owner.__name__}.{name} is typed {hint!r}, but its value is a {expected}")
+        shown = declared.__name__ if isinstance(declared, type) else repr(declared)
+        raise TypeError(f"{owner.__name__}.{name} is declared Field[{shown}], but its value is a {expected}")
     return FieldMeta(owner, name, py_type, value == root.key, None, optional), value
 
 
@@ -211,13 +209,20 @@ def _entity_meta(cls: type, indexes: tuple[tuple[str, ...], ...]) -> EntityMeta:
     return EntityMeta(cls, table_name(cls.__name__), field_metas,tuple(tuple(by_name[name] for name in index) for index in indexes))
 
 
-def _field_meta(owner: type, f: Field[Any], hint: Any) -> FieldMeta:
+def _field_meta(owner: type, f: dataclasses.Field[Any], hint: Any) -> FieldMeta:
     is_key = bool(f.metadata.get(_KEY))
-    ref, value = get_args(hint) if get_origin(hint) is Ref else (None, hint)
+    ref, value = get_args(hint) if get_origin(hint) is Ref else (None, _declared(owner, f.name, hint))
     value, optional = _without_none(value)
     if sql_type(value) is None or (ref is not None and value is not str):
         raise TypeError(f"{owner.__name__}.{f.name} has unsupported type {hint!r}")
     return FieldMeta(owner, f.name, value, is_key, ref, optional)
+
+
+def _declared(owner: type, name: str, hint: Any) -> Any:
+    """The type of the field `name` of `owner`, declared as `Field[int]`."""
+    if get_origin(hint) is not Field:
+        raise TypeError(f"{owner.__name__}.{name} is declared {hint!r}; declare it as Field[...], or Ref[...] for a reference")
+    return get_args(hint)[0]
 
 
 def _without_none(hint: Any) -> tuple[Any, bool]:

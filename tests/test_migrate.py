@@ -4,13 +4,13 @@ from dataclasses import replace
 import pytest
 
 import inlay
-from inlay import BrokenRef, Db, Ref, SchemaMismatch, entity, key
+from inlay import BrokenRef, Db, Field, Ref, SchemaMismatch, entity, key
 
 
 @entity
 class Customer:
-    id: str = key()
-    name: str
+    id: Field[str] = key()
+    name: Field[str]
 
 
 def order_line(order_class: type) -> type:
@@ -18,7 +18,7 @@ def order_line(order_class: type) -> type:
 
     @entity(indexes=[("order",)])
     class OrderLine:
-        id: str = key()
+        id: Field[str] = key()
         order: Ref[order_class]
 
     return OrderLine
@@ -29,9 +29,9 @@ def old_order() -> type:
 
     @entity(indexes=[("customer",)])
     class Order:
-        id: str = key()
+        id: Field[str] = key()
         customer: Ref[Customer]
-        total: int
+        total: Field[int]
 
     return Order
 
@@ -43,17 +43,17 @@ OldLine = order_line(OldOrder)
 # The old shape under another name, and the new class with the name of the table.
 @entity(indexes=[("customer",)])
 class OrderLegacy:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
-    total: int
+    total: Field[int]
 
 
 @entity(indexes=[("customer",)])
 class Order:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
-    total: int
-    discount: int
+    total: Field[int]
+    discount: Field[int]
 
 
 OrderLine = order_line(Order)
@@ -64,9 +64,9 @@ def renumbered_order() -> type:
 
     @entity(indexes=[("customer",)])
     class Order:
-        number: str = key()
+        number: Field[str] = key()
         customer: Ref[Customer]
-        total: int
+        total: Field[int]
 
     return Order
 
@@ -172,9 +172,9 @@ def test_the_old_and_the_new_class_cannot_share_a_table(path):
 def test_the_table_keeps_its_name(path):
     @entity(indexes=[("customer",)])
     class Purchase:
-        id: str = key()
+        id: Field[str] = key()
         customer: Ref[Customer]
-        total: int
+        total: Field[int]
 
     with pytest.raises(SchemaMismatch, match="rename changes it"):
         migrate(path, lambda db: None, OldOrder, Purchase)
@@ -199,26 +199,26 @@ def old_category() -> type:
 
     @entity(indexes=[("parent",)])
     class Category:
-        id: str = key()
+        id: Field[str] = key()
         parent: Ref[Category]
-        name: str
+        name: Field[str]
 
     return Category
 
 
 @entity(indexes=[("parent",)])
 class CategoryLegacy:
-    id: str = key()
+    id: Field[str] = key()
     parent: Ref[CategoryLegacy]
-    name: str
+    name: Field[str]
 
 
 @entity(indexes=[("parent",)])
 class Category:
-    id: str = key()
+    id: Field[str] = key()
     parent: Ref[Category]
-    name: str
-    top_level: bool
+    name: Field[str]
+    top_level: Field[bool]
 
 
 def test_a_class_that_refers_to_itself_is_migrated_with_its_references(tmp_path):

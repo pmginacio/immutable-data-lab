@@ -4,30 +4,30 @@ from datetime import date, datetime
 
 import pytest
 
-from inlay import Ref, entity, key
+from inlay import Field, Ref, entity, key
 from inlay.meta import FieldMeta, meta
 from inlay.nodes import Compare, Filter, In, Table
 
 
 @entity(indexes=[("city", "name")])
 class Customer:
-    id: str = key()
-    name: str
-    city: str
+    id: Field[str] = key()
+    name: Field[str]
+    city: Field[str]
 
 
 @entity(indexes=[("customer",), ("total",)])
 class Order:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
-    total: int
+    total: Field[int]
 
 
 @entity(indexes=[("parent",)])
 class Category:
-    id: str = key()
+    id: Field[str] = key()
     parent: Ref[Category]
-    name: str
+    name: Field[str]
 
 
 def test_key_is_generated_uuid7_or_given():
@@ -96,21 +96,21 @@ def test_forward_ref_target_resolves_later():
     [("Customer", "customer"), ("OrderLine", "order_line"), ("HTTPLog", "http_log")],
 )
 def test_default_table_name(class_name, table):
-    cls = entity(type(class_name, (), {"__annotations__": {"id": str}, "id": key()}))
+    cls = entity(type(class_name, (), {"__annotations__": {"id": Field[str]}, "id": key()}))
     assert meta(cls).table == table
 
 
 def test_all_field_types_supported():
     @entity
     class Everything:
-        id: str = key()
-        i: int
-        f: float
-        s: str
-        b: bytes
-        flag: bool
-        at: datetime
-        day: date
+        id: Field[str] = key()
+        i: Field[int]
+        f: Field[float]
+        s: Field[str]
+        b: Field[bytes]
+        flag: Field[bool]
+        at: Field[datetime]
+        day: Field[date]
 
     assert [f.py_type for f in meta(Everything).fields][1:] == [int, float, str, bytes, bool, datetime, date]
 
@@ -125,7 +125,7 @@ def test_rejects_missing_key():
 
         @entity
         class NoKey:
-            id: str
+            id: Field[str]
 
 
 def test_rejects_two_keys():
@@ -133,8 +133,8 @@ def test_rejects_two_keys():
 
         @entity
         class TwoKeys:
-            id: str = key()
-            other: str = key()
+            id: Field[str] = key()
+            other: Field[str] = key()
 
 
 def test_rejects_unsupported_type():
@@ -142,8 +142,8 @@ def test_rejects_unsupported_type():
 
         @entity
         class Bad:
-            id: str = key()
-            tags: list[str]
+            id: Field[str] = key()
+            tags: Field[list[str]]
 
 
 def test_rejects_unknown_index_field():
@@ -151,7 +151,7 @@ def test_rejects_unknown_index_field():
 
         @entity(indexes=[("nope",)])
         class Bad:
-            id: str = key()
+            id: Field[str] = key()
 
 
 def test_rejects_ref_without_index():
@@ -159,9 +159,9 @@ def test_rejects_ref_without_index():
 
         @entity(indexes=[("total", "customer")])
         class Bad:
-            id: str = key()
+            id: Field[str] = key()
             customer: Ref[Customer]
-            total: int
+            total: Field[int]
 
 
 def test_rejects_non_str_key():
@@ -169,7 +169,7 @@ def test_rejects_non_str_key():
 
         @entity
         class Bad:
-            id: int = key()
+            id: Field[int] = key()
 
 
 def test_rejects_field_names_used_by_field_references():
@@ -177,8 +177,8 @@ def test_rejects_field_names_used_by_field_references():
 
         @entity
         class Bad:
-            id: str = key()
-            startswith: str
+            id: Field[str] = key()
+            startswith: Field[str]
 
 
 def test_rejects_empty_index():
@@ -186,4 +186,4 @@ def test_rejects_empty_index():
 
         @entity(indexes=[()])
         class Bad:
-            id: str = key()
+            id: Field[str] = key()

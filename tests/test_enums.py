@@ -6,7 +6,7 @@ from enum import Enum, IntEnum, StrEnum
 import pytest
 
 import inlay
-from inlay import entity, hashed, key
+from inlay import Field, entity, default, hashed, key
 
 
 class Kind(StrEnum):
@@ -21,15 +21,15 @@ class Floor(IntEnum):
 
 @entity
 class Home:
-    id: str = key()
-    kind: Kind
-    floor: Floor | None = None
+    id: Field[str] = key()
+    kind: Field[Kind]
+    floor: Field[Floor | None] = default(None)
 
 
 @entity
 class Look:
-    id: str = hashed()
-    kind: Kind
+    id: Field[str] = hashed()
+    kind: Field[Kind]
 
 
 @pytest.fixture
@@ -56,8 +56,8 @@ def test_conditions_and_groups_use_members(db):
 def test_a_hashed_key_is_the_same_as_for_the_plain_value():
     @entity
     class PlainLook:  # the fields of Look as they were before `kind` became an enum
-        id: str = hashed()
-        kind: str
+        id: Field[str] = hashed()
+        kind: Field[str]
 
     assert PlainLook(kind="flat").id == Look(kind=Kind.FLAT).id
 
@@ -65,9 +65,9 @@ def test_a_hashed_key_is_the_same_as_for_the_plain_value():
 def _plain_home() -> type:
     @entity
     class Home:  # Home as it was before its fields became enums, with the same table
-        id: str = key()
-        kind: str
-        floor: int | None = None
+        id: Field[str] = key()
+        kind: Field[str]
+        floor: Field[int | None] = default(None)
 
     return Home
 
@@ -96,5 +96,5 @@ def test_other_enums_are_refused():
     with pytest.raises(TypeError, match="unsupported type"):
         @entity
         class Paint:
-            id: str = key()
-            color: Color
+            id: Field[str] = key()
+            color: Field[Color]

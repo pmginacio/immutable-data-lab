@@ -1,5 +1,5 @@
 from collections.abc import Iterable
-from typing import Any
+from typing import TYPE_CHECKING, Any, overload
 
 from inlay.functions import Function
 from inlay.meta import FieldMeta, meta
@@ -24,12 +24,41 @@ from inlay.nodes import (
 )
 
 
-class Expr:
+class Field[T]:
+    """A field of an entity or a projection, declared as `total: Field[int]`.
+
+    On the class it is an `Expr` for queries, such as `Order.total > 100`, and on a record it is the value.
+    `@entity` and `@projection` put one on the class for each field. A record keeps its values in its own
+    `__dict__`, which Python reads before a descriptor without `__set__`, so reading a field on a record
+    never calls this.
+    """
+
+    # Name-mangled, as `Expr`'s are, since an `Expr` is a `Field` too.
+    __slots__ = ("__meta",)
+
+    def __init__(self, meta: FieldMeta) -> None:
+        self.__meta = meta
+
+    @overload
+    def __get__(self, obj: None, owner: type) -> Expr[T]: ...
+    @overload
+    def __get__(self, obj: object, owner: type) -> T: ...
+    def __get__(self, obj: object, owner: type | None = None) -> Any:
+        return Expr((), self.__meta)
+
+    if TYPE_CHECKING:
+        # Only for type checkers, which take the type of each argument of a record's `__init__` from it;
+        # at runtime a `__set__` would make every read of a field go through `__get__`.
+        def __set__(self, obj: object, value: T) -> None: ...
+
+
+class Expr[T](Field[T]):
     """A value written on entity classes.
 
     It is a field such as `Order.total`, a field through relations such as `Order.customer.city`,
     or a value computed from fields such as `Order.total * 100` or `to_month(Order.placed)`.
     Comparing it builds a condition, so it has no equality or hash of its own.
+    It is a `Field` so that a projection can declare `city: Field[str] = Order.customer.city`.
     """
 
     # Name-mangled so they never hide a field of the class a `Ref` points to.
@@ -129,7 +158,7 @@ class Expr:
         return self.__relations, next(value_fields(self.__value)).owner
 
 
-def contains(field: str, text: str) -> Condition:
+def contains(field: Expr[str], text: str) -> Condition:
     relations, f = _field_parts(field)
     return _through(relations, Match(f, "contains", text))
 
@@ -140,7 +169,7 @@ def _own(value: object) -> Value:
     return RefValue(relations, v) if relations else v
 
 
-def one_of[T](field: T, values: Iterable[T]) -> Condition:
+def one_of[T](field: Expr[T], values: Iterable[T]) -> Condition:
     relations, f = _field_parts(field)
     return _through(relations, In(f, tuple(values)))
 

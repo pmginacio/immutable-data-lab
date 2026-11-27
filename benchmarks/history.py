@@ -29,7 +29,7 @@ from typing import Any
 import inlay
 import inlay.datoms
 import inlay.history
-from inlay import Ref, entity, key
+from inlay import Field, Ref, entity, key
 
 CUSTOMERS = 2_000
 GETS = 2_000
@@ -41,15 +41,15 @@ MIXED_ORDERS = 2_000
 
 @entity
 class Customer:
-    id: str = key()
-    name: str
+    id: Field[str] = key()
+    name: Field[str]
 
 
 @entity(indexes=[("customer",), ("total",)])
 class Order:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
-    total: int
+    total: Field[int]
 
 
 @dataclass(frozen=True)

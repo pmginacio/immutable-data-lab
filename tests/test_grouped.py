@@ -3,20 +3,20 @@
 import pytest
 
 import inlay
-from inlay import Ref, entity, key
+from inlay import Field, Ref, entity, key
 
 
 @entity
 class Customer:
-    id: str = key()
-    city: str
+    id: Field[str] = key()
+    city: Field[str]
 
 
 @entity(indexes=[("customer",)])
 class Order:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
-    total: int
+    total: Field[int]
 
 
 @pytest.fixture

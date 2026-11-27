@@ -8,7 +8,7 @@ import pytest
 from helpers import opened
 
 import inlay.history
-from inlay import AlreadyExists, Missing, Ref, entity, key
+from inlay import AlreadyExists, Field, Missing, Ref, entity, key
 from inlay.history.sql import CURRENT, delete_by_key_sql, select_sql
 from inlay.meta import meta
 from inlay.nodes import Compare, Filter, Table
@@ -16,15 +16,15 @@ from inlay.nodes import Compare, Filter, Table
 
 @entity
 class Customer:
-    id: str = key()
-    name: str
+    id: Field[str] = key()
+    name: Field[str]
 
 
 @entity(indexes=[("customer",)])
 class Order:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
-    total: int
+    total: Field[int]
 
 
 ANA = Customer(id="ana", name="Ana")

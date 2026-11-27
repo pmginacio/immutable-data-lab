@@ -8,21 +8,21 @@ from helpers import opened
 
 import inlay.datoms
 import inlay.history
-from inlay import Ref, entity, key
+from inlay import Field, Ref, entity, key
 from inlay.history.sql import tx_time
 
 
 @entity
 class Customer:
-    id: str = key()
-    name: str
+    id: Field[str] = key()
+    name: Field[str]
 
 
 @entity(indexes=[("customer",)])
 class Order:
-    id: str = key()
+    id: Field[str] = key()
     customer: Ref[Customer]
-    total: int
+    total: Field[int]
 
 
 ANA = Customer(id="ana", name="Ana")

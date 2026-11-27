@@ -157,24 +157,24 @@ class Query[T]:
         return Query(Project(self._node, projection), self._db)
 
     @overload
-    def sum(self, value: int) -> int: ...
+    def sum(self, value: Expr[int]) -> int: ...
     @overload
-    def sum(self, value: float) -> float: ...
+    def sum(self, value: Expr[float]) -> float: ...
     def sum(self, value: Any) -> Any:
         aggregate = aggregate_of(sum)
         return self._aggregate(aggregate, self._aggregated(aggregate, value))
 
     @overload
-    def min[V](self, value: V) -> V | None: ...
+    def min[V](self, value: Expr[V]) -> V | None: ...
     @overload
-    def min[V, D](self, value: V, default: D) -> V | D: ...
+    def min[V, D](self, value: Expr[V], default: D) -> V | D: ...
     def min(self, value: Any, default: Any = None) -> Any:
         return self._extreme(min, value, default)
 
     @overload
-    def max[V](self, value: V) -> V | None: ...
+    def max[V](self, value: Expr[V]) -> V | None: ...
     @overload
-    def max[V, D](self, value: V, default: D) -> V | D: ...
+    def max[V, D](self, value: Expr[V], default: D) -> V | D: ...
     def max(self, value: Any, default: Any = None) -> Any:
         return self._extreme(max, value, default)
 
@@ -182,7 +182,24 @@ class Query[T]:
     @overload
     def aggregate_by[R](self, key: type, func: Callable[..., R], value: Any = None) -> "Grouped[str, R]": ...
     @overload
-    def aggregate_by[K, R](self, key: K, func: Callable[..., R], value: Any = None) -> "Grouped[K, R]": ...
+    def aggregate_by[K, R](self, key: Expr[K], func: Callable[..., R], value: Any = None) -> "Grouped[K, R]": ...
+    # A tuple of values gives tuples of their types; typing cannot say that for any length, so two and three are spelled out.
+    @overload
+    def aggregate_by[K1, K2, R](
+        self,
+        key: tuple[Expr[K1], Expr[K2]],
+        func: Callable[..., R],
+        value: Any = None,
+    ) -> "Grouped[tuple[K1, K2], R]": ...
+    @overload
+    def aggregate_by[K1, K2, K3, R](
+        self,
+        key: tuple[Expr[K1], Expr[K2], Expr[K3]],
+        func: Callable[..., R],
+        value: Any = None,
+    ) -> "Grouped[tuple[K1, K2, K3], R]": ...
+    @overload
+    def aggregate_by[R](self, key: tuple[Any, ...], func: Callable[..., R], value: Any = None) -> "Grouped[tuple[Any, ...], R]": ...
     def aggregate_by(self, key: Any, func: Callable[..., Any], value: Any = None) -> "Grouped[Any, Any]":
         """`func` of `value` over the records with each value of `key`, in key order; keys with no records are left out.
 
@@ -253,16 +270,18 @@ class Grouped[K, V](Mapping[K, V]):
     _db: Db | None = None
 
     @property
-    def value(self) -> V:
+    def value(self) -> Expr[V]:
         """The value of each group, for conditions and sort keys."""
-        return cast(Any, Expr((), group_value(self._node)))
+        return Expr((), group_value(self._node))
 
     @overload
     def __getitem__(self, key: slice) -> "Grouped[K, V]": ...
     @overload
     def __getitem__(self, key: K) -> V: ...
+    # The value of each record's own group, None for a record with no group, as in `totals[Customer.id]`;
+    # a `Ref` field, as in `totals[Order.customer]`, is typed as its class on the class.
     @overload
-    def __getitem__(self, key: type) -> V: ...  # a `Ref` field, typed as its class on the class, as in `totals[Order.customer]`
+    def __getitem__(self, key: type | Expr[Any] | tuple[Expr[Any], ...]) -> Expr[V | None]: ...
     def __getitem__(self, key: Any) -> Any:
         if isinstance(key, slice):
             return replace(self, _node=Slice(self._node, *_slice_bounds(key)))

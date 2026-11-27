@@ -2,7 +2,7 @@ import sqlite3
 
 import pytest
 
-from inlay import entity, key
+from inlay import Field, entity, key
 from inlay.functions import aggregate_of
 from inlay.meta import meta
 from inlay.nodes import Filter, Slice, Sort, Table
@@ -11,10 +11,10 @@ from inlay.sql import aggregate_sql, create_table_sql, insert_sql, select_sql
 
 @entity(indexes=[("city",)])
 class Customer:
-    id: str = key()
-    name: str
-    city: str
-    age: int
+    id: Field[str] = key()
+    name: Field[str]
+    city: Field[str]
+    age: Field[int]
 
 
 ID, NAME, CITY, AGE = (meta(Customer).field(name) for name in ("id", "name", "city", "age"))

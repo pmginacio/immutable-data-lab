@@ -8,7 +8,7 @@ from datetime import datetime
 from types import TracebackType
 from typing import Any, Self, overload
 
-from inlay.conditions import own_value
+from inlay.conditions import Expr, own_value
 from inlay.db import AlreadyExists, BrokenRef, Missing, SchemaMismatch
 from inlay.entity import restored
 from inlay.functions import Aggregate, aggregate_of
@@ -127,28 +127,28 @@ class RecordView[T]:
         return next(iter(self.filter(Compare(self._meta.key, "==", key))), None)
 
     @overload
-    def sum(self, value: int) -> int: ...
+    def sum(self, value: Expr[int]) -> int: ...
     @overload
-    def sum(self, value: float) -> float: ...
+    def sum(self, value: Expr[float]) -> float: ...
     def sum(self, value: Any) -> Any:
         aggregate = aggregate_of(sum)
         return self._aggregate(aggregate, self._aggregated(aggregate, value))
 
     @overload
-    def min[V](self, value: V) -> V | None: ...
+    def min[V](self, value: Expr[V]) -> V | None: ...
     @overload
-    def min[V, D](self, value: V, default: D) -> V | D: ...
+    def min[V, D](self, value: Expr[V], default: D) -> V | D: ...
     def min(self, value: Any, default: Any = None) -> Any:
         return self._extreme(min, value, default)
 
     @overload
-    def max[V](self, value: V) -> V | None: ...
+    def max[V](self, value: Expr[V]) -> V | None: ...
     @overload
-    def max[V, D](self, value: V, default: D) -> V | D: ...
+    def max[V, D](self, value: Expr[V], default: D) -> V | D: ...
     def max(self, value: Any, default: Any = None) -> Any:
         return self._extreme(max, value, default)
 
-    def aggregate_by[K, R](self, key: K, func: Callable[..., R], value: Any = None) -> dict[K, R]:
+    def aggregate_by[K, R](self, key: Expr[K] | Any, func: Callable[..., R], value: Any = None) -> dict[K, R]:
         """`func` of `value` over the records with each value of `key`, in key order; keys with no records are left out.
 
         `key` is a value or a tuple of values, as in `sorted`.
