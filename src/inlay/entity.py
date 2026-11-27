@@ -58,19 +58,17 @@ class Ref[T, V = str]:
 
 
 class _Field:
-    """Wraps a slot: the value on objects, an `Expr` for the field on the class."""
+    """An `Expr` for the field on the class.
 
-    def __init__(self, slot: Any, meta: FieldMeta) -> None:
-        self._slot = slot
+    A record keeps its values in its own `__dict__`. Python reads that before a descriptor without `__set__`,
+    so reading a field on a record never calls this.
+    """
+
+    def __init__(self, meta: FieldMeta) -> None:
         self._meta = meta
 
     def __get__(self, obj: object, owner: type | None = None) -> Any:
-        if obj is not None:
-            return self._slot.__get__(obj, owner)
         return Expr((), self._meta)
-
-    def __set__(self, obj: object, value: object) -> None:
-        self._slot.__set__(obj, value)
 
 
 @overload
@@ -88,7 +86,7 @@ def entity(cls: type | None = None, /, *, indexes: Sequence[tuple[str, ...]] = (
 def _make_entity(cls: type, indexes: tuple[tuple[str, ...], ...]) -> type:
     if any(isinstance(v, Field) and v.metadata.get(_HASHED) for v in vars(cls).values()):
         _hash_key_on_init(cls)
-    new = dataclass(frozen=True, slots=True, kw_only=True)(cls)
+    new = dataclass(frozen=True, kw_only=True)(cls)
     m = _entity_meta(new, indexes)
     return _with_fields(new, "__inlay__", m, m)
 
@@ -127,7 +125,7 @@ def projection[C](root: type) -> Callable[[type[C]], type[C]]:
 
     def wrap(cls: type) -> type:
         values = _take_values(cls)
-        new = dataclass(frozen=True, slots=True, kw_only=True)(cls)
+        new = dataclass(frozen=True, kw_only=True)(cls)
         p = _projection(new, root_meta, values)
         return _with_fields(new, "__inlay_projection__", p, p.m)
 
@@ -156,7 +154,7 @@ def _with_fields(cls: type, attribute: str, description: object, m: EntityMeta) 
     """`cls` with `description` stored as `attribute`, and each field of `m` an `Expr` on the class."""
     setattr(cls, attribute, description)
     for f in m.fields:
-        setattr(cls, f.name, _Field(cls.__dict__[f.name], f))
+        setattr(cls, f.name, _Field(f))
     return cls
 
 

@@ -43,13 +43,12 @@ def test_replace_keeps_key():
     assert (moved.id, moved.city) == (ana.id, "Porto")
 
 
-def test_objects_are_frozen_keyword_only_slotted():
+def test_objects_are_frozen_keyword_only():
     ana = Customer(name="Ana", city="Lisbon")
     with pytest.raises(FrozenInstanceError):
         ana.city = "Porto"
     with pytest.raises(TypeError):
         Customer("Ana", "Lisbon")
-    assert not hasattr(ana, "__dict__")
 
 
 def test_ref_value_on_object_is_the_key():
