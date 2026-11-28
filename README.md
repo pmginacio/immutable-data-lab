@@ -420,7 +420,30 @@ Conditions on the root come before `project`, and filters, sorting, slices and a
 `project` takes a query that is only filtered, since a subquery keeps no order.
 A projection has no table, so it is not registered and `db[OrderRow]` raises.
 
-A field can be the value of a group, defined without a db as above, such as the biggest order of each order's customer:
+`.` follows a `Ref` to one record, as `Order.customer.name` does.
+The other way, from a customer to its orders, reaches many records, so a projection takes it through an aggregate, one value for each row:
+
+```python
+@projection(Customer)
+class CustomerRow:
+    id: Field[str]
+    name: Field[str]
+    spent: Field[int] = Order.total.sum()                         # over the orders that point at each customer
+    orders: Field[int] = Order.id.count()
+    biggest: Field[int | None] = Order.total.max()
+    per_order: Field[float | None] = Order.total.sum() / Order.id.count()
+    big_orders: Field[int] = Order.id.count(filter=Order.total > 100)
+```
+
+The aggregates are `.sum()`, `.min()`, `.max()`, `.count()` and `.avg()` of a value, and `.agg(aggregate)` for your own.
+They go along the one `Ref` from the records aggregated to the projected class, `Order.customer` here.
+With none, two, or a `Ref` to the class itself, the `Ref` is named first, as in `Order.id.count(Order.billing)`, and `@projection` raises until it is.
+`filter=` keeps only the records it matches, as `filter` on a query does.
+Over no records `count` and `sum` give 0, and the others None, so their fields are optional.
+An aggregate of an aggregate goes two references back, the inner one naming its `Ref`: `OrderLine.qty.sum(OrderLine.order).sum()`.
+An aggregate is a value only in a projection; to filter or sort by one, do it on the projection's field after `project`.
+
+A field can also be the value of a group, defined without a db as above, such as the biggest order of each order's customer:
 
 ```python
 biggest = query(Order).aggregate_by(Order.customer, max, Order.total)
