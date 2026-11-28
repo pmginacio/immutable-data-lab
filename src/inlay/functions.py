@@ -138,13 +138,27 @@ _T = TypeVar("_T")
 _Number = TypeVar("_Number", int, float)
 
 # The first value that is not None, as SQL's COALESCE, which skips only NULL, so a False still wins.
-coalesce = Function(
+_COALESCE = Function(
     "coalesce",
     (_T | None, ...),
     _T,
     lambda *values: next((v for v in values if v is not None), None),
     "COALESCE({})",
 )
+
+
+# A function of its own only to be typed: a `Function` cannot say that its result is the type of its arguments.
+# A field that can be None with a plain value after it, the common case, can no longer be None.
+@overload
+def coalesce[V](first: Expr[V | None], default: V, /) -> Expr[V]: ...
+@overload
+def coalesce[V](first: Expr[V], /, *rest: V | Expr[V] | None) -> Expr[V]: ...
+@overload
+def coalesce[V](*values: V | None) -> V | None: ...
+def coalesce(*values: Any) -> Any:
+    """The first of `values` that is not None, as SQL's `COALESCE`: computed here for plain values, and a value for
+    queries when the first is a field, as `coalesce(Order.customer.city, "unknown")`."""
+    return _COALESCE(*values)
 
 # The aggregates the methods of a value use, such as `Order.amount.sum()`.
 # SQL gives NULL for the sum of no values, and Python 0.

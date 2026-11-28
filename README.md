@@ -603,7 +603,7 @@ Order.customer.city == "Lisbon"
 
 `==` becomes SQLite's `IS`, which treats NULL as a value and uses indexes as `=` does, and `~` counts an unknown result as false first, so conditions keep Python's two values.
 
-Relations become subqueries, so there are no joins to write and no duplicate rows.
+A condition through a relation becomes a subquery, and a value read through one a join that matches one row, so there are no joins to write and no duplicate rows.
 `filter` takes one condition. Combine conditions with `&`, `|` and `~`, and a list of them with `all_of` and `any_of`.
 Text fields have `.startswith`, `.endswith` and `.contains`, and any field `.one_of(values)`, since Python's `in` cannot build a condition.
 A reference is compared by its key, `Order.customer.id == ana.id`, which reads the reference itself and needs no subquery.
@@ -650,8 +650,8 @@ This is version one, and the limits are on purpose.
 - SQLite only.
 - A `Db` works only in the thread and process that opened it: open one in each.
 - No composite keys.
-- No cascading deletes or reverse relations.
-- Few functions so far: arithmetic, `to_month` and `to_day`.
+- No cascading deletes, and no field for the records that point at one: a projection reads them only through aggregates.
+- Few functions so far: arithmetic, `coalesce`, `to_month` and `to_day`, and your own `Function`s.
 - Slices that skip many records are slow, because SQLite reads and discards the skipped rows.
   Filtering from the last seen value avoids that.
 

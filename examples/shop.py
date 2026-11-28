@@ -17,12 +17,14 @@ from enum import StrEnum
 from pathlib import Path
 
 import inlay
-from inlay import AlreadyExists, Db, Field, Function, Query, Ref, entity, default, key, projection, query, to_month
+from inlay import AlreadyExists, Db, Field, Function, Query, Ref, coalesce, default, entity, key, projection, query, to_month
 
 # ---------------------------------------------------------------------------
 # 1. The data
 #
 # inlay: a class is a frozen dataclass. `@entity` adds what the db needs, and there is no base class.
+# inlay: each field is declared `Field[...]`: on a record it is the value, and on the class a value for queries,
+# so type checkers check both. A default is written `default(...)`.
 # inlay: `key()` marks the field that identifies a record. When it has no value, a unique one is made right away,
 # so a record has its key before it is stored.
 # inlay: `indexes` lists every index. Nothing is indexed unless it is listed here.
@@ -42,7 +44,7 @@ class Customer:
     id: Field[str] = key()  # the email address: the app can choose the key
     name: Field[str]
     city: Field[str]
-    referred_by: Ref[Customer, str | None]
+    referred_by: Ref[Customer, str | None] = default(None)
 
 
 @entity(indexes=[("stock",)])
@@ -54,7 +56,8 @@ class Product:
 
 
 # inlay: `Ref[Customer]` is stored as the customer's key. On a record, `order.customer` is a plain `str`.
-# On the class, `Order.customer` leads to the customer's fields, so a query can use `Order.customer.city`.
+# On the class, `Order.customer` leads to the customer's fields, so a query can use `Order.customer.city`,
+# and compares by the key, `Order.customer.id == ...`, which reads the reference itself.
 # inlay: a `Ref` must be the first field of an index, so queries through it do not scan the table.
 @entity(indexes=[("customer",), ("status",), ("placed",)])
 class Order:
@@ -183,8 +186,6 @@ def get_order(db: Db, order_id: str) -> Order:
 # ---------------------------------------------------------------------------
 
 paid_orders = query(Order).filter(Order.status == Status.PAID)
-# inlay: `aggregate_by` gives groups, a mapping that also runs in the db and is filtered, sorted and sliced.
-spent = paid_orders.aggregate_by(Order.customer, sum, Order.total)
 
 
 def orders_in_city(orders: Query[Order], city: str) -> Query[Order]:
@@ -208,17 +209,15 @@ def waiting_too_long(db: Db, now: datetime) -> Query[Order]:
     return db[Order].filter((Order.status == Status.NEW) & (Order.placed < now - timedelta(days=7)))
 
 
-def top_customers(db: Db, n: int) -> list[tuple[Customer, int]]:
-    # inlay: `items()` reads the groups in one query, here the `n` biggest, in that order.
-    revenue = dict(db[spent].sorted(key=spent.value, reverse=True)[:n].items())
-    # There is no join: look the related records up in one query and combine them.
-    customers = {c.id: c for c in db[Customer].filter(Customer.id.one_of(revenue))}
-    return [(customers[customer_id], total) for customer_id, total in revenue.items()]
+def find_customers(db: Db, text: str) -> Query[Customer]:
+    # inlay: a text field has `startswith`, `endswith` and `contains`, and any field `one_of`.
+    return db[Customer].filter(Customer.name.contains(text)).sorted(key=Customer.name)
 
 
 def orders_per_month(db: Db) -> Mapping[date, int]:
     # inlay: functions such as `to_month` work wherever a field does, and `len` counts.
-    return db[Order].aggregate_by(to_month(Order.placed), len)
+    # inlay: `~` negates a condition, and `&` and `|` combine them.
+    return db[Order].filter(~(Order.status == Status.CANCELLED)).aggregate_by(to_month(Order.placed), len)
 
 
 # inlay: a function of your own is written twice, in Python for plain values and in SQL for the db.
@@ -236,7 +235,6 @@ def revenue_from_referrals(db: Db, customer_id: str) -> int:
 
 # inlay: a projection is the shape of a result, such as the rows an API returns: fields of the order and values
 # of its customer, read in one query. It has no table, and a view turns into it with `project`.
-# inlay: a field can be the value of the record's group, here what its customer spent; None for a key with no group.
 @projection(Order)
 class OrderRow:
     id: Field[str]
@@ -244,7 +242,26 @@ class OrderRow:
     total: Field[int]
     customer_name: Field[str] = Order.customer.name
     city: Field[str] = Order.customer.city
-    customer_spent: Field[int | None] = spent[Order.customer]
+
+
+# inlay: the other way along a `Ref`, from a customer to its orders, reaches many records, so a projection takes it
+# through an aggregate: over the orders that point at each customer, along `Order.customer`, the only `Ref` there.
+# `filter=` keeps only some of them, and a `Ref` to the class itself is named. Over no orders a sum is 0.
+# inlay: `coalesce` is the first value that is not None, here the referrer's name or else "nobody".
+@projection(Customer)
+class CustomerRow:
+    id: Field[str]
+    name: Field[str]
+    referrer: Field[str] = coalesce(Customer.referred_by.name, "nobody")
+    orders: Field[int] = Order.id.count()
+    spent: Field[int] = Order.total.sum(filter=Order.status == Status.PAID)
+    items: Field[int] = OrderLine.qty.sum(OrderLine.order).sum()
+    referrals: Field[int] = Customer.id.count(Customer.referred_by)
+
+
+def top_customers(db: Db, n: int) -> Query[CustomerRow]:
+    # inlay: the aggregates are fields like any other, so the db sorts and slices by them.
+    return db[Customer].project(CustomerRow).sorted(key=CustomerRow.spent, reverse=True)[:n]
 
 
 def latest_paid(db: Db, city: str | None = None) -> Query[OrderRow]:
@@ -316,8 +333,13 @@ def main() -> None:
                 print(f"Refused: {e}")
 
             print("\nTop customers")
-            for customer, total in top_customers(db, 2):
-                print(f"  {customer.name:<4} {money(total):>8}")
+            for row in top_customers(db, 2):
+                print(f"  {row.name:<4} {money(row.spent):>8}  {row.orders} orders, {row.items} items, "
+                      f"referred by {row.referrer}, referred {row.referrals}")
+
+            print("\nCustomers named like 'a'")
+            for customer in find_customers(db, "a"):
+                print(f"  {customer.name}")
 
             lisbon = orders_in_city(db[paid_orders], "Lisbon")
             # inlay: `len` and `sum` run inside the db and return one number. No record is loaded.
@@ -337,10 +359,9 @@ def main() -> None:
                 paid = "not paid" if order.paid is None else f"paid {order.paid:%H:%M}"
                 print(f"  {order.placed:%d %b %H:%M}  {order.status:<9} {money(order.total):>8}  {paid}")
 
-            print("\nLatest paid orders in Porto, and what each customer spent in all")
+            print("\nLatest paid orders in Porto")
             for row in latest_paid(db, city="Porto"):
-                spent_in_all = money(row.customer_spent or 0)
-                print(f"  {row.placed:%d %b}  {row.customer_name:<4} {money(row.total):>8}  of {spent_in_all}")
+                print(f"  {row.placed:%d %b}  {row.customer_name:<4} {money(row.total):>8}")
 
             print(f"\nStock worth {money(stock_value(db))}")
             print("\nLow stock")

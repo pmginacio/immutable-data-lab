@@ -17,6 +17,7 @@ from inlay import (
     all_of,
     any_of,
     avg,
+    coalesce,
     default,
     entity,
     key,
@@ -59,6 +60,12 @@ assert_type(Order.customer.city, Expr[str])
 assert_type(to_month(Order.placed), Expr[date])
 assert_type(to_month(date(2026, 1, 5)), date)
 assert_type(replace(o, total=150), Order)
+assert_type(coalesce(Order.customer.city, "unknown"), Expr[str])
+assert_type(coalesce(Order.discount, 0), Expr[int])
+assert_type(coalesce(None, 3), int | None)
+assert_type(Order.total.sum(), Expr[int])
+assert_type(Order.total.max(), Expr[int | None])
+assert_type(Order.id.count(Order.customer), Expr[int])
 
 
 def _tables(db: Db) -> None:
