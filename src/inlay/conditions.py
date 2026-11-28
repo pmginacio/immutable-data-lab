@@ -1,9 +1,10 @@
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, overload
 
-from inlay.functions import Function
+from inlay.functions import COUNT, MAX, MIN, SUM, Aggregate, Function, avg
 from inlay.meta import FieldMeta, meta
 from inlay.nodes import (
+    Aggregated,
     BinOp,
     Call,
     Compare,
@@ -16,10 +17,12 @@ from inlay.nodes import (
     RefValue,
     Table,
     Value,
+    check_condition,
     condition_fields,
     describe,
     replaced,
     result_type,
+    value_class,
     value_fields,
 )
 
@@ -144,6 +147,38 @@ class Expr[T](Field[T]):
     def contains(self: Expr[str], text: str) -> Condition:
         relations, field = _field_parts(self)
         return _through(relations, Match(field, "contains", text))
+
+    def agg[R](self, aggregate: Aggregate[R], ref: type | None = None, *, filter: Condition | None = None) -> Expr[R | None]:
+        """`aggregate` of this value over the records it belongs to that point at the record at hand through `ref`,
+        those `filter` keeps, as in `Order.amount.agg(avg)` in a projection of `Customer`; it gets only values that
+        are not None. A projection infers `ref` when the records have exactly one `Ref` to it."""
+        value = _own(self)
+        cls = value_class(value)
+        field = None
+        if ref is not None:
+            relations, field = _field_parts(ref)
+            if relations or field.target is None or field.owner is not cls:
+                raise TypeError(f"{describe(field)} is not a Ref of {cls.__name__}, along which to aggregate")
+        if filter is not None:
+            check_condition(cls, filter)
+        if not aggregate.takes(t := result_type(value)):
+            raise TypeError(f"{aggregate.name} cannot take {describe(value)}, a {t.__name__}")
+        return Expr((), Aggregated(aggregate, value, field, filter))
+
+    def sum(self, ref: type | None = None, *, filter: Condition | None = None) -> Expr[T]:
+        return self.agg(SUM, ref, filter=filter)
+
+    def min(self, ref: type | None = None, *, filter: Condition | None = None) -> Expr[T | None]:
+        return self.agg(MIN, ref, filter=filter)
+
+    def max(self, ref: type | None = None, *, filter: Condition | None = None) -> Expr[T | None]:
+        return self.agg(MAX, ref, filter=filter)
+
+    def count(self, ref: type | None = None, *, filter: Condition | None = None) -> Expr[int]:
+        return self.agg(COUNT, ref, filter=filter)
+
+    def avg(self, ref: type | None = None, *, filter: Condition | None = None) -> Expr[float | None]:
+        return self.agg(avg, ref, filter=filter)
 
     def one_of(self, values: Iterable[T]) -> Condition:
         """The value is one of `values`, which may include None; Python's `in` cannot build a condition."""

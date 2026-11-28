@@ -94,6 +94,9 @@ def test_transforms_compute_in_python_on_values():
     (lambda: Customer.city == 5, "Customer.city is a str, but it is compared with 5"),
     (lambda: Order.total.one_of([1, "2"]), "compared with '2'"),
     (lambda: to_month(Order.placed) == "2026-01-01", "is a date, but it is compared with"),
+    (lambda: Order.total.sum(Order.total), "Order.total is not a Ref of Order"),
+    (lambda: Order.total.sum(Customer.id), "Customer.id is not a Ref of Order"),
+    (lambda: Customer.name.sum(), "sum cannot take Customer.name, a str"),
 ])
 def test_values_of_the_wrong_kind_fail_when_built(mistake, error):
     with pytest.raises(TypeError, match=error):
@@ -106,6 +109,12 @@ def test_combining_conditions():
     assert a | b == any_of(a, b) == Or((a, b))
     assert ~a == Not(a)
     assert (all_of(), any_of()) == (And(()), Or(()))
+
+
+def test_an_aggregate_filters_only_the_records_it_aggregates():
+    Order.total.sum(Order.customer, filter=Order.discount > 0)
+    with pytest.raises(ValueError, match="Customer.city cannot be used on Order"):
+        Order.total.sum(filter=Customer.city == "Lisbon")
 
 
 def test_check_condition_rejects_fields_of_another_class():

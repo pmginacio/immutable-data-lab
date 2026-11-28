@@ -146,16 +146,22 @@ coalesce = Function(
     "COALESCE({})",
 )
 
+# The aggregates the methods of a value use, such as `Order.amount.sum()`.
+# SQL gives NULL for the sum of no values, and Python 0.
+SUM = Aggregate("sum", sum, "coalesce(SUM({}), 0)", arg=_Number, result=_Number)
+MIN = Aggregate("min", min, "MIN({})", arg=_T, result=_T)
+MAX = Aggregate("max", max, "MAX({})", arg=_T, result=_T)
+# COUNT of a value skips NULL, as counting the values that are not None does.
+COUNT = Aggregate("count", lambda values: sum(1 for v in values if v is not None), "COUNT({})", arg=_T, result=int)
 # SQLite's AVG always gives a float, as `fmean` does.
 avg = Aggregate("avg", statistics.fmean, "AVG({})", arg=_Number, result=float)
 
-# The built-ins that can be used as aggregates, so users write `sum` rather than an inlay name.
+# The built-ins `aggregate_by` takes, so its users write `sum` rather than an inlay name.
 _BUILTIN_AGGREGATES: dict[object, Aggregate[Any]] = {
     len: Aggregate("len", lambda values: sum(1 for _ in values), "COUNT(*)", arg=None, result=int),
-    # SQL gives NULL for no values, and Python 0.
-    sum: Aggregate("sum", sum, "coalesce(SUM({}), 0)", arg=_Number, result=_Number),
-    min: Aggregate("min", min, "MIN({})", arg=_T, result=_T),
-    max: Aggregate("max", max, "MAX({})", arg=_T, result=_T),
+    sum: SUM,
+    min: MIN,
+    max: MAX,
 }
 
 

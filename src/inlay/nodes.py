@@ -41,7 +41,21 @@ class GroupValue:
     at: tuple[Value, ...]
 
 
-type Value = FieldMeta | Call | BinOp | RefValue | GroupValue
+@dataclass(frozen=True)
+class Aggregated:
+    """`aggregate` of `value` over the records that point at the record at hand through `ref`, those `filter` keeps.
+
+    `value` is a value of the records aggregated, not of the record at hand. `ref` is None until a projection infers
+    it, when the records aggregated have exactly one `Ref` to the projected class.
+    """
+
+    aggregate: Aggregate[Any]
+    value: Value
+    ref: FieldMeta | None
+    filter: Condition | None
+
+
+type Value = FieldMeta | Call | BinOp | RefValue | GroupValue | Aggregated
 
 
 @dataclass(frozen=True)
@@ -257,6 +271,8 @@ def _classes_reached(value: object) -> set[type]:
             return {r.target for r in refs if r.target is not None}
         case GroupValue(groups, at):
             return classes_read(groups).union(*map(_classes_reached, at))
+        case Aggregated(_, inner, _, cond):
+            return {value_class(inner)} | _classes_reached(inner) | (set() if cond is None else classes_read(cond))
         case Call(_, args):
             return set().union(*map(_classes_reached, args))
         case BinOp(_, left, right):
@@ -282,6 +298,8 @@ def result_type(value: object) -> type:
             return result_type(inner)
         case GroupValue(groups):
             return group_value(groups).py_type
+        case Aggregated(aggregate, inner):
+            return aggregate.result_type(result_type(inner))
         case _:
             return type(value)
 
@@ -299,14 +317,22 @@ def describe(value: object) -> str:
             return f"{value.owner.__name__}.{value.name}"
         case RefValue(refs, FieldMeta() as field):
             return ".".join([describe(refs[0]), *(r.name for r in refs[1:]), field.name])
-        case Call() | BinOp() | RefValue() | GroupValue():
+        case Call() | BinOp() | RefValue() | GroupValue() | Aggregated():
             return "a computed value"
         case _:
             return repr(value)
 
 
+def value_class(value: Value) -> type:
+    """The class of the records `value` is a value of, such as `Order` for `Order.amount`."""
+    for field in value_fields(value):
+        return field.owner
+    raise TypeError(f"expected a value of a record, such as Order.total, got {describe(value)}")
+
+
 def value_fields(value: object) -> Iterator[FieldMeta]:
-    """The fields of the record at hand that `value` reads; none for a plain value."""
+    """The fields of the record at hand that `value` reads; none for a plain value, or for an aggregate, whose
+    fields are of the records it aggregates."""
     match value:
         case FieldMeta():
             yield value

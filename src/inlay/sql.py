@@ -5,6 +5,7 @@ from typing import Any
 from inlay.functions import Aggregate
 from inlay.meta import EntityMeta, FieldMeta, meta
 from inlay.nodes import (
+    Aggregated,
     And,
     BinOp,
     Call,
@@ -232,6 +233,8 @@ def value_sql(value: object, rows: _Rows = _ONE_TABLE) -> tuple[str, list[object
                 # SQLite divides two integers without a remainder; Python's `/` does not.
                 left_sql = f"CAST({left_sql} AS REAL)"
             return f"({left_sql} {op} {right_sql})", left_params + right_params
+        case Aggregated():
+            raise TypeError("an aggregate such as Order.amount.sum() can only be the value of a projection field")
         case RefValue(refs, inner) if refs in rows.joined:
             return value_sql(inner, _Rows(rows.joined[refs]))
         case RefValue(refs, inner):
