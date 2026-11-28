@@ -132,22 +132,21 @@ type Node = Table | Filter | Sort | Slice | Project | Group
 
 
 class Condition:
-    """A test on a record.
+    """A test on a record, such as `Order.total > 100`, combined with `&`, `|` and `~`."""
 
-    Type checkers see a comparison like `Order.total > 100` as a `bool`,
-    so the functions that take conditions accept `Condition | bool`.
-    """
-
-    def __and__(self, other: Condition | bool) -> And:
+    def __and__(self, other: Condition) -> And:
         return all_of(self, other)
 
-    def __or__(self, other: Condition | bool) -> Or:
+    def __or__(self, other: Condition) -> Or:
         return any_of(self, other)
+
+    def __invert__(self) -> Not:
+        return Not(self)
 
     def __bool__(self) -> bool:
         raise TypeError(
-            "a condition has no truth value: use all_of or &, any_of or |, and negate instead of "
-            "and, or and not; use one_of instead of in; write 1 < x < 5 as (x > 1) & (x < 5)"
+            "a condition has no truth value: use & or all_of, | or any_of, and ~ instead of "
+            "and, or and not; use .one_of() instead of in; write 1 < x < 5 as (x > 1) & (x < 5)"
         )
 
 
@@ -188,19 +187,15 @@ class Not(Condition):
     item: Condition
 
 
-def all_of(*conds: Condition | bool) -> And:
+def all_of(*conds: Condition) -> And:
     return And(tuple(map(as_condition, conds)))
 
 
-def any_of(*conds: Condition | bool) -> Or:
+def any_of(*conds: Condition) -> Or:
     return Or(tuple(map(as_condition, conds)))
 
 
-def negate(cond: Condition | bool) -> Not:
-    return Not(as_condition(cond))
-
-
-# Type checkers see `Order.total > 100` as a `bool`, so a stray real `bool` must be caught at runtime.
+# A stray `bool`, such as from `and` or `in`, which Python forces to one, is caught here.
 def as_condition(value: object) -> Condition:
     if not isinstance(value, Condition):
         raise TypeError(f"expected a condition such as Order.total > 100, got {value!r}")

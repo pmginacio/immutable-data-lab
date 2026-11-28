@@ -3,7 +3,7 @@ from datetime import date, datetime
 
 import pytest
 
-from inlay import Field, Ref, all_of, any_of, contains, entity, key, negate, one_of, to_day, to_month
+from inlay import Field, Ref, all_of, any_of, entity, key, to_day, to_month
 from inlay.meta import FieldMeta, meta
 from inlay.nodes import And, BinOp, Call, Compare, Filter, In, Match, Not, Or, Table, check_condition
 
@@ -64,10 +64,10 @@ def test_comparisons_build_compare_nodes(fn, op):
     ),
     (Customer.name.startswith("A"), Match(NAME, "startswith", "A")),
     (Customer.name.endswith("a"), Match(NAME, "endswith", "a")),
-    (contains(Customer.name, "n"), Match(NAME, "contains", "n")),
+    (Customer.name.contains("n"), Match(NAME, "contains", "n")),
     (Order.customer.name.startswith("A"), through(Order, "customer", Match(NAME, "startswith", "A"))),
-    (one_of(Customer.city, {"Lisbon"}), In(CITY, ("Lisbon",))),
-    (one_of(Order.customer, ["c1", "c2"]), In(CUSTOMER, ("c1", "c2"))),
+    (Customer.city.one_of({"Lisbon"}), In(CITY, ("Lisbon",))),
+    (Order.customer.one_of(["c1", "c2"]), In(CUSTOMER, ("c1", "c2"))),
     (Order.total * 100 > 5000, Compare(BinOp("*", TOTAL, 100), ">", 5000)),
     (100 * Order.total > 5000, Compare(BinOp("*", 100, TOTAL), ">", 5000)),
     (Order.total - Order.discount > 0, Compare(BinOp("-", TOTAL, DISCOUNT), ">", 0)),
@@ -89,6 +89,11 @@ def test_transforms_compute_in_python_on_values():
     (lambda: Order.customer * 2, "needs numbers"),
     (lambda: Order.total + "x", "needs numbers"),
     (lambda: (Order.total * 2).startswith("1"), "expected a field"),
+    (lambda: (Order.total * 2).one_of([2]), "expected a field"),
+    (lambda: Order.total > "100", "Order.total is a int, but it is compared with '100', a str"),
+    (lambda: Customer.city == 5, "Customer.city is a str, but it is compared with 5"),
+    (lambda: Order.total.one_of([1, "2"]), "compared with '2'"),
+    (lambda: to_month(Order.placed) == "2026-01-01", "is a date, but it is compared with"),
 ])
 def test_values_of_the_wrong_kind_fail_when_built(mistake, error):
     with pytest.raises(TypeError, match=error):
@@ -99,14 +104,8 @@ def test_combining_conditions():
     a, b = Order.total > 1, Order.total < 9
     assert a & b == all_of(a, b) == And((a, b))
     assert a | b == any_of(a, b) == Or((a, b))
-    assert negate(a) == Not(a)
+    assert ~a == Not(a)
     assert (all_of(), any_of()) == (And(()), Or(()))
-
-
-@pytest.mark.parametrize("mistake", [lambda: contains("name", "n"), lambda: one_of("city", ["Lisbon"])])
-def test_functions_taking_a_field_reject_anything_else(mistake):
-    with pytest.raises(TypeError, match="expected a field"):
-        mistake()
 
 
 def test_check_condition_rejects_fields_of_another_class():
@@ -118,7 +117,6 @@ def test_check_condition_rejects_fields_of_another_class():
 @pytest.mark.parametrize("mistake", [
     lambda: all_of(Order.total > 1, True),
     lambda: any_of(False),
-    lambda: negate(True),
     lambda: (Order.total > 1) & True,
 ])
 def test_combinators_reject_a_plain_bool(mistake):

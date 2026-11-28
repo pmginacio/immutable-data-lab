@@ -3,7 +3,7 @@ from datetime import date, datetime
 
 import pytest
 
-from inlay import Field, Ref, all_of, any_of, contains, entity, key, negate, one_of, to_day, to_month
+from inlay import Field, Ref, all_of, any_of, entity, key, to_day, to_month
 from inlay.meta import meta
 from inlay.sql import condition_sql, create_table_sql, insert_sql, quote
 from inlay.types import to_sql
@@ -80,13 +80,13 @@ def conn():
         (Customer, Customer.name.endswith("Ana"), {"ana"}),
         (Customer, Customer.name.endswith(""), ALL_CUSTOMERS),
         (Customer, Customer.name.endswith("Anabel and more"), set()),
-        (Customer, contains(Customer.name, "nab"), {"anabel"}),
-        (Customer, contains(Customer.name, ""), ALL_CUSTOMERS),
-        (Customer, one_of(Customer.city, ("Lisbon", "Faro")), {"ana", "anabel", "rita"}),
-        (Customer, one_of(Customer.city, ()), set()),
+        (Customer, Customer.name.contains("nab"), {"anabel"}),
+        (Customer, Customer.name.contains(""), ALL_CUSTOMERS),
+        (Customer, Customer.city.one_of(("Lisbon", "Faro")), {"ana", "anabel", "rita"}),
+        (Customer, Customer.city.one_of(()), set()),
         (Customer, (Customer.city == "Lisbon") & Customer.name.startswith("Anab"), {"anabel"}),
         (Customer, (Customer.city == "Porto") | (Customer.city == "Faro"), {"bob", "rita"}),
-        (Customer, negate(Customer.city == "Lisbon"), {"bob", "rita"}),
+        (Customer, ~(Customer.city == "Lisbon"), {"bob", "rita"}),
         (Customer, all_of(), ALL_CUSTOMERS),
         (Customer, any_of(), set()),
         (Order, Order.total > Order.discount, {"o1", "o3"}),
@@ -97,8 +97,8 @@ def conn():
         (Order, Order.total / 3 > 33.2, {"o1", "o3"}),
         (Order, Order.customer == "bob", {"o3"}),
         (Order, Order.customer.city == "Lisbon", {"o1", "o2"}),
-        (Order, negate(Order.customer.city == "Lisbon"), {"o3"}),
-        (Order, one_of(Order.customer.city, ("Porto", "Faro")), {"o3"}),
+        (Order, ~(Order.customer.city == "Lisbon"), {"o3"}),
+        (Order, Order.customer.city.one_of(("Porto", "Faro")), {"o3"}),
         (Order, Order.customer.name.startswith("An") & (Order.total >= 100), {"o1"}),
         (OrderLine, OrderLine.order.customer.city == "Lisbon", {"l1"}),
         (OrderLine, OrderLine.order.customer.city == "Porto", {"l2"}),

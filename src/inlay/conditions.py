@@ -72,7 +72,11 @@ class Expr[T](Field[T]):
         ref = self.__value
         if not isinstance(ref, FieldMeta) or ref.target is None:
             raise AttributeError(f"{describe(ref)} is not a Ref, so it has no field {name!r}")
-        return Expr((*self.__relations, ref), meta(ref.target).field(name))
+        field = meta(ref.target).field(name)
+        # The key of the record a `Ref` points to is what the `Ref` stores, so `Order.customer.id` is `Order.customer`.
+        if field.is_key:
+            return Expr(self.__relations, ref)
+        return Expr((*self.__relations, ref), field)
 
     def __eq__(self, other: object) -> Condition:
         return self.__compare("==", other)
@@ -129,15 +133,29 @@ class Expr[T](Field[T]):
         result_type(call)
         return Expr((), call)
 
-    def startswith(self, prefix: str) -> Condition:
+    def startswith(self: Expr[str], prefix: str) -> Condition:
         relations, field = _field_parts(self)
         return _through(relations, Match(field, "startswith", prefix))
 
-    def endswith(self, suffix: str) -> Condition:
+    def endswith(self: Expr[str], suffix: str) -> Condition:
         relations, field = _field_parts(self)
         return _through(relations, Match(field, "endswith", suffix))
 
+    def contains(self: Expr[str], text: str) -> Condition:
+        relations, field = _field_parts(self)
+        return _through(relations, Match(field, "contains", text))
+
+    def one_of(self, values: Iterable[T]) -> Condition:
+        """The value is one of `values`, which may include None; Python's `in` cannot build a condition."""
+        relations, field = _field_parts(self)
+        values = tuple(values)
+        for value in values:
+            _check_comparable(field, value)
+        return _through(relations, In(field, values))
+
     def __compare(self, op: CompareOp, other: object) -> Condition:
+        if not isinstance(other, Expr):
+            _check_comparable(self.__value, other)
         return _through(self.__relations, Compare(self.__value, op, self.__operand(other)))
 
     def __with(self, value: Value) -> Expr:
@@ -158,20 +176,21 @@ class Expr[T](Field[T]):
         return self.__relations, next(value_fields(self.__value)).owner
 
 
-def contains(field: Expr[str], text: str) -> Condition:
-    relations, f = _field_parts(field)
-    return _through(relations, Match(f, "contains", text))
+def _check_comparable(value: Value, plain: object) -> None:
+    """Raises if `plain` is not a value of `value`'s type, which SQLite would compare anyway, an integer before any text.
+
+    None compares with anything, and an `int` with a `float`, as in Python.
+    """
+    t = result_type(value)
+    if plain is None or isinstance(plain, t) or (t in (int, float) and type(plain) in (int, float)):
+        return
+    raise TypeError(f"{describe(value)} is a {t.__name__}, but it is compared with {plain!r}, a {type(plain).__name__}")
 
 
 def _own(value: object) -> Value:
     """`value` read on the record its first `Ref` starts from."""
     relations, v = _parts(value)
     return RefValue(relations, v) if relations else v
-
-
-def one_of[T](field: Expr[T], values: Iterable[T]) -> Condition:
-    relations, f = _field_parts(field)
-    return _through(relations, In(f, tuple(values)))
 
 
 def own_value(cls: type, value: object) -> Value:

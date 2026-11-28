@@ -126,7 +126,7 @@ class Query[T]:
             raise TypeError("a query can only be sliced, as in q[:10]")
         return Query(Slice(self._node, *_slice_bounds(s)), self._db)
 
-    def filter(self, cond: Condition | bool) -> "Query[T]":
+    def filter(self, cond: Condition) -> "Query[T]":
         cond = as_condition(cond)
         check_condition(self._meta.cls, cond)
         return Query(Filter(self._node, cond), self._db)
@@ -309,7 +309,7 @@ class Grouped[K, V](Mapping[K, V]):
     def values(self) -> ValuesView[V]:
         return self._read().values()
 
-    def filter(self, cond: Condition | bool) -> "Grouped[K, V]":
+    def filter(self, cond: Condition) -> "Grouped[K, V]":
         cond = group_condition(root_group(self._node), as_condition(cond))
         return replace(self, _node=Filter(self._node, cond))
 
@@ -355,7 +355,7 @@ class RecordSet[T](Query[T]):
             if deleted != len(keys):
                 raise Missing(f"{len(keys) - deleted} of the {self._meta.cls.__name__} keys are not stored")
 
-    def clear(self, cond: Condition | bool = all_of()) -> None:
+    def clear(self, cond: Condition = all_of()) -> None:
         cond = as_condition(cond)
         check_condition(self._meta.cls, cond)
         sql, params = clear_sql(self._meta, cond)

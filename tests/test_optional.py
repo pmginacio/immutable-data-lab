@@ -7,7 +7,7 @@ import pytest
 import inlay
 import inlay.datoms
 import inlay.history
-from inlay import BrokenRef, Field, Ref, coalesce, entity, default, key, negate, one_of, projection
+from inlay import BrokenRef, Field, Ref, coalesce, entity, default, key, projection
 
 
 @entity
@@ -79,6 +79,11 @@ def test_coalesce_refuses_values_of_two_types():
         coalesce(Order.discount, "none")
 
 
+def test_the_key_through_a_ref_is_what_the_ref_stores(db):
+    assert ids(db[Order].filter(Order.customer.id == "ana")) == ["o1"]
+    assert ids(db[Order].filter(Order.customer.id == None)) == ["o3"]
+
+
 def test_a_ref_to_a_missing_record_still_raises(db):
     with pytest.raises(BrokenRef):
         db.add(Order(customer="nobody", total=1))
@@ -92,16 +97,16 @@ def test_equality_matches_none_as_python_does(db):
 
 def test_an_ordering_comparison_is_false_for_none_and_its_negation_true(db):
     assert ids(db[Order].filter(Order.discount > 1)) == ["o1"]
-    assert ids(db[Order].filter(negate(Order.discount > 1))) == ["o2", "o3"]
+    assert ids(db[Order].filter(~(Order.discount > 1))) == ["o2", "o3"]
 
 
 def test_one_of_can_hold_none(db):
-    assert ids(db[Order].filter(one_of(Order.discount, (None, 5)))) == ["o1", "o2", "o3"]
+    assert ids(db[Order].filter(Order.discount.one_of((None, 5)))) == ["o1", "o2", "o3"]
 
 
 def test_a_path_through_an_empty_ref_matches_nothing_and_its_negation_everything(db):
     assert ids(db[Order].filter(Order.customer.city == "Lisbon")) == ["o1"]
-    assert ids(db[Order].filter(negate(Order.customer.city == "Lisbon"))) == ["o2", "o3"]
+    assert ids(db[Order].filter(~(Order.customer.city == "Lisbon"))) == ["o2", "o3"]
     assert ids(db[Order].filter(Order.customer.city == None)) == ["o2"]
     assert ids(db[Order].filter(Order.customer == None)) == ["o3"]
 

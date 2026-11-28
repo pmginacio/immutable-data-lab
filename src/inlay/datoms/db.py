@@ -113,7 +113,7 @@ class RecordView[T]:
             raise ValueError("a slice takes a start and a stop, and no negative numbers")
         return self._view(Slice(self._query, start, stop))
 
-    def filter(self, cond: Condition | bool) -> "RecordView[T]":
+    def filter(self, cond: Condition) -> "RecordView[T]":
         cond = as_condition(cond)
         check_condition(self._meta.cls, cond)
         return self._view(Filter(self._query, cond))
@@ -216,7 +216,7 @@ class RecordSet[T](RecordView[T]):
             if deleted != len(keys):
                 raise Missing(f"{len(keys) - deleted} of the {self._meta.cls.__name__} keys are not stored")
 
-    def clear(self, cond: Condition | bool = all_of()) -> None:
+    def clear(self, cond: Condition = all_of()) -> None:
         cond = as_condition(cond)
         check_condition(self._meta.cls, cond)
         writes, params = clear_sql(self._meta, cond)

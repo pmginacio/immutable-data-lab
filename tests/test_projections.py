@@ -147,6 +147,7 @@ def test_a_field_not_on_the_root_needs_a_value():
         (int, Order.customer.name, r"declared Field\[int\], but its value is a str \| None"),
         (str, Order.customer.name, r"declared Field\[str\], but its value is a str \| None"),
         (int | None, Order.total, r"declared Field\[int \| None\], but its value is a int"),
+        (float, Order.total / Order.total, r"declared Field\[float\], but its value is a float \| None"),
     ],
 )
 def test_each_field_is_typed_as_its_value(hint, value, message):
@@ -161,3 +162,12 @@ def test_values_come_from_the_root():
         class Other:
             id: Field[str]
             name: Field[str] = Customer.name
+
+
+def test_a_division_by_zero_is_none(db):
+    @projection(Order)
+    class Share:
+        id: Field[str]
+        per_unit: Field[float | None] = Order.total / (Order.total - 100)
+
+    assert {r.id: r.per_unit for r in db[Order].project(Share)} == {"o1": None, "o2": -40 / 60, "o3": -60 / 40}

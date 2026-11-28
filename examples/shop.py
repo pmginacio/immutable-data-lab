@@ -17,7 +17,7 @@ from enum import StrEnum
 from pathlib import Path
 
 import inlay
-from inlay import AlreadyExists, Db, Field, Function, Query, Ref, entity, default, key, one_of, projection, query, to_month
+from inlay import AlreadyExists, Db, Field, Function, Query, Ref, entity, default, key, projection, query, to_month
 
 # ---------------------------------------------------------------------------
 # 1. The data
@@ -134,7 +134,7 @@ def place_order(db: Db, customer_id: str, basket: Mapping[str, int], now: dateti
         if db[Customer].get(customer_id) is None:
             raise ShopError(f"unknown customer {customer_id}")
         # inlay: `one_of` is an `IN` test, and a dict gives its keys. The result is whole `Product` records.
-        products = {p.id: p for p in db[Product].filter(one_of(Product.id, basket))}
+        products = {p.id: p for p in db[Product].filter(Product.id.one_of(basket))}
         if unknown := basket.keys() - products.keys():
             raise ShopError(f"unknown products {sorted(unknown)}")
         if short := [products[pid].name for pid, qty in basket.items() if products[pid].stock < qty]:
@@ -159,8 +159,8 @@ def cancel(db: Db, order_id: str) -> Order:
     with db.transaction():
         cancelled = move_to(get_order(db, order_id), Status.CANCELLED)
         # inlay: a view is lazy and runs its query each time it is read. `tuple` takes a snapshot, to read it twice.
-        lines = tuple(db[OrderLine].filter(OrderLine.order == order_id))
-        products = {p.id: p for p in db[Product].filter(one_of(Product.id, [line.product for line in lines]))}
+        lines = tuple(db[OrderLine].filter(OrderLine.order.id == order_id))
+        products = {p.id: p for p in db[Product].filter(Product.id.one_of([line.product for line in lines]))}
         restocked = (replace(products[line.product], stock=products[line.product].stock + line.qty) for line in lines)
         db.update(cancelled, *restocked)
     return cancelled
@@ -195,7 +195,7 @@ def orders_in_city(orders: Query[Order], city: str) -> Query[Order]:
 
 def latest_orders(db: Db, customer_id: str, page: int = 0, size: int = 5) -> Query[Order]:
     # `sorted` and slicing work like the built-ins, and the sorting and the slicing both happen in the db.
-    newest_first = db[Order].filter(Order.customer == customer_id).sorted(key=Order.placed, reverse=True)
+    newest_first = db[Order].filter(Order.customer.id == customer_id).sorted(key=Order.placed, reverse=True)
     return newest_first[page * size : (page + 1) * size]
 
 
@@ -212,7 +212,7 @@ def top_customers(db: Db, n: int) -> list[tuple[Customer, int]]:
     # inlay: `items()` reads the groups in one query, here the `n` biggest, in that order.
     revenue = dict(db[spent].sorted(key=spent.value, reverse=True)[:n].items())
     # There is no join: look the related records up in one query and combine them.
-    customers = {c.id: c for c in db[Customer].filter(one_of(Customer.id, revenue))}
+    customers = {c.id: c for c in db[Customer].filter(Customer.id.one_of(revenue))}
     return [(customers[customer_id], total) for customer_id, total in revenue.items()]
 
 
@@ -231,7 +231,7 @@ def orders_per_hour(db: Db) -> Mapping[int, int]:
 
 def revenue_from_referrals(db: Db, customer_id: str) -> int:
     # inlay: a path can go through an optional reference. A customer that nobody referred matches nothing.
-    return db[paid_orders].filter(Order.customer.referred_by == customer_id).sum(Order.total)
+    return db[paid_orders].filter(Order.customer.referred_by.id == customer_id).sum(Order.total)
 
 
 # inlay: a projection is the shape of a result, such as the rows an API returns: fields of the order and values

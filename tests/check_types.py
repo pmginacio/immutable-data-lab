@@ -17,18 +17,15 @@ from inlay import (
     all_of,
     any_of,
     avg,
-    contains,
     default,
     entity,
     key,
     query,
-    negate,
-    one_of,
     projection,
     to_month,
 )
 from inlay.conditions import Expr
-from inlay.nodes import And, Condition, Or
+from inlay.nodes import And, Condition, Not, Or
 
 
 @entity(indexes=[("city",)])
@@ -106,14 +103,14 @@ class OrderRow:
 def _conditions() -> None:
     assert_type(Order.total > 100, Condition)
     all_of(Order.total > 100, Order.customer.city == "Lisbon")
-    any_of(contains(Customer.name, "x"), Customer.name.startswith("A"))
-    negate(one_of(Order.total, (1, 2)))
+    any_of(Customer.name.contains("x"), Customer.name.startswith("A"))
+    assert_type(~Order.total.one_of((1, 2)), Not)
     assert_type((Order.total > 1) | (Order.total == 0), Or)
-    assert_type(contains(Customer.name, "x") & (Order.total > 1), And)
+    assert_type(Customer.name.contains("x") & (Order.total > 1), And)
 
 
 def _expected_errors() -> None:
-    contains(Order.total, "x")  # type: ignore
+    Order.total.contains("x")  # type: ignore
     Customer("Ana", "Lisbon")  # type: ignore
     Customer(name="Ana")  # type: ignore
     Order(customer=5, total=120, placed=date(2026, 1, 1))  # type: ignore

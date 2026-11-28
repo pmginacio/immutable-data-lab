@@ -201,7 +201,7 @@ with inlay.open() as db:
     # A transaction groups several calls: if anything in the block raises, none of it is written.
     # Here Ana is merged into Bob: her orders move to him and she is deleted, or nothing changes at all.
     with db.transaction():
-        db.update(*(replace(order, customer=bob.id) for order in db[Order].filter(Order.customer == ana.id)))
+        db.update(*(replace(order, customer=bob.id) for order in db[Order].filter(Order.customer.id == ana.id)))
         db[Customer].delete(ana.id)
 ```
 
@@ -217,7 +217,7 @@ Several processes that start on a new file at once check and register inside `db
 A field typed `X | None` can hold `None`, and an optional reference is written `Ref[Customer, str | None]`.
 
 ```python
-from inlay import coalesce, default, negate
+from inlay import coalesce, default
 
 @entity(indexes=[("customer",)])
 class Order:
@@ -230,7 +230,7 @@ orders = db[Order]
 orders.filter(Order.discount == None)          # the orders with no discount
 orders.filter(Order.discount != 5)             # includes the orders with no discount, as in Python
 orders.filter(Order.discount > 1)              # a comparison with None is false, so these are left out
-orders.filter(negate(Order.discount > 1))      # and here they are in
+orders.filter(~(Order.discount > 1))          # and here they are in
 orders.filter(Order.customer.city == "Lisbon") # an order with no customer matches nothing through it
 orders.filter(coalesce(Order.discount, 0) < 5) # the first value that is not None, as SQL's COALESCE
 orders.sorted(key=coalesce(Order.customer.city, "unknown"))  # through an empty Ref the city counts as None
@@ -239,7 +239,7 @@ orders.sorted(key=coalesce(Order.customer.city, "unknown"))  # through an empty 
 `coalesce` also works as the value of a projection field, and on plain values, where it is computed in Python.
 
 Conditions follow Python, so `==` and `!=` treat `None` as a value, and a condition and its negation always split the records in two.
-`one_of` can include `None`.
+`.one_of(...)` can include `None`.
 Sorting puts `None` first, and last in reverse.
 `sum`, `min`, `max` and `avg` skip `None`, and `aggregate_by` groups the records with `None` under the key `None`.
 The key cannot be optional, and other unions, such as `int | str`, are refused.
@@ -367,7 +367,7 @@ dict(db[biggest].items())
 ```
 
 Reading a query that has no db, by looping over it, `len` or `in`, raises `TypeError`.
-Built into another query, as a group value or in `one_of`, a query adds its conditions only, and the db that runs is the outer one.
+Built into another query as a group value, a query adds its conditions only, and the db that runs is the outer one.
 
 ### Your own functions
 
@@ -578,10 +578,12 @@ Order.customer.city == "Lisbon"
 # "customer" IN (SELECT "id" FROM "customer" AS "_0" WHERE "city" IS ?)
 ```
 
-`==` becomes SQLite's `IS`, which treats NULL as a value and uses indexes as `=` does, and `negate` counts an unknown result as false first, so conditions keep Python's two values.
+`==` becomes SQLite's `IS`, which treats NULL as a value and uses indexes as `=` does, and `~` counts an unknown result as false first, so conditions keep Python's two values.
 
 Relations become subqueries, so there are no joins to write and no duplicate rows.
-`filter` takes one condition. Combine conditions with `&`, `|` and `negate`, and a list of them with `all_of` and `any_of`.
+`filter` takes one condition. Combine conditions with `&`, `|` and `~`, and a list of them with `all_of` and `any_of`.
+Text fields have `.startswith`, `.endswith` and `.contains`, and any field `.one_of(values)`, since Python's `in` cannot build a condition.
+A reference is compared by its key, `Order.customer.id == ana.id`, which reads the reference itself and needs no subquery.
 Python's `and`, `or`, `not` and `1 < x < 5` would silently drop part of a condition, so a condition refuses to be a boolean and names the right tool.
 
 **Queries are lazy and immutable.**

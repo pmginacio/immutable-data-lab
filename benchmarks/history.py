@@ -129,7 +129,7 @@ def reads(orders: Orders, w: Workload, when: str) -> dict[str, float]:
     customer = w.customers[7]
     return {
         f"{when}: load all orders": best(lambda: list(orders())),
-        f"{when}: filter customer == one": best(lambda: list(orders().filter(Order.customer == customer.id))),
+        f"{when}: filter customer == one": best(lambda: list(orders().filter(Order.customer.id == customer.id))),
         f"{when}: filter total > 989 (about 1%)": best(lambda: list(orders().filter(Order.total > 989))),
         f"{when}: filter through the Ref": best(lambda: list(orders().filter(Order.customer.name == customer.name))),
         f"{when}: sorted by total, first 10": best(lambda: list(orders().sorted(key=Order.total)[:10])),

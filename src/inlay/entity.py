@@ -192,8 +192,9 @@ def _may_be_none(value: object) -> bool:
         case Call(fn, args):
             may = [v is None or _may_be_none(v) for v in args]
             return all(may) if fn.takes_none() else any(may)
-        case BinOp(_, left, right):
-            return _may_be_none(left) or _may_be_none(right)
+        case BinOp(op, left, right):
+            # SQLite gives NULL for a division by zero.
+            return op == "/" or _may_be_none(left) or _may_be_none(right)
         case GroupValue():
             return True  # a key with no records
         case _:
