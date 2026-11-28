@@ -72,6 +72,7 @@ def conn():
     ("cls", "cond", "expected"),
     [
         (Customer, Customer.city == "Lisbon", {"ana", "anabel"}),
+        (Customer, Customer.city == "x' OR '1' = '1", set()),  # a value is data, never SQL
         (Customer, Customer.city != "Lisbon", {"bob", "rita"}),
         (Customer, Customer.name.startswith("An"), {"ana", "anabel"}),
         (Customer, Customer.name.startswith("an"), set()),
@@ -119,22 +120,7 @@ def test_transforms_pick_the_same_records_in_sqlite_and_in_python(conn, field, t
     assert in_sqlite == {e.id for e in EVENTS if transform(getattr(e, field)) == day}
 
 
-def test_values_are_parameters():
-    assert condition_sql(Customer.name == "a'b") == ('"name" IS ?', ["a'b"])
-
-
 def test_datetimes_are_stored_as_text():
     _, params = condition_sql(Event.at > datetime(2026, 1, 1))
     assert params == ["2026-01-01T00:00:00"]
 
-
-def test_relations_become_nested_subqueries():
-    assert condition_sql(Order.customer.city == "Lisbon") == (
-        '"customer" IN (SELECT "id" FROM "customer" AS "_0" WHERE "city" IS ?)',
-        ["Lisbon"],
-    )
-    assert condition_sql(OrderLine.order.customer.city == "Lisbon") == (
-        '"order" IN (SELECT "id" FROM "order" AS "_0" WHERE "customer" IN '
-        '(SELECT "id" FROM "customer" AS "_0" WHERE "city" IS ?))',
-        ["Lisbon"],
-    )

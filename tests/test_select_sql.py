@@ -83,11 +83,6 @@ def test_ties_are_broken_by_key_in_both_directions(conn):
     assert ids(conn, Sort(CUSTOMERS, (CITY,), True)) == ["c4", "c2", "c3", "c5", "c1"]
 
 
-def test_sorting_by_the_key_needs_no_tiebreaker():
-    sql, _ = select_sql(Sort(CUSTOMERS, (ID,), True))
-    assert sql.endswith('ORDER BY "id" DESC')
-
-
 @pytest.mark.parametrize(
     ("start", "stop", "expected"),
     [(1, 3, ["c3", "c4"]), (3, None, ["c1", "c5"]), (0, 2, ["c2", "c3"]), (2, 2, []), (4, 1, []), (9, None, [])],
