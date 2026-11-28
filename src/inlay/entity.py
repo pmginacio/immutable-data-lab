@@ -10,7 +10,8 @@ from typing import Any, dataclass_transform, get_args, get_origin, overload
 
 from inlay.conditions import Expr, Field, own_value
 from inlay.meta import EntityMeta, FieldMeta, meta, table_name
-from inlay.nodes import BinOp, Call, GroupValue, Projection, RefValue, Value, result_type
+from inlay.functions import COUNT, SUM
+from inlay.nodes import Aggregated, BinOp, Call, GroupValue, Projection, RefValue, Value, result_type
 from inlay.types import sql_type, to_sql
 
 _KEY = "inlay_key"
@@ -168,7 +169,7 @@ def _projection(cls: type, root: EntityMeta, values: dict[str, Expr]) -> Project
 def _projected(owner: type, root: EntityMeta, name: str, hint: Any, values: dict[str, Expr]) -> tuple[FieldMeta, Value]:
     """The field `name` of the projection `owner`, and its value on a record of `root`."""
     if name in values:
-        value = own_value(root.cls, values[name])
+        value = own_value(root.cls, values[name], aggregated=True)
     elif name in {f.name for f in root.fields}:
         value = root.field(name)
     else:
@@ -197,6 +198,8 @@ def _may_be_none(value: object) -> bool:
             return op == "/" or _may_be_none(left) or _may_be_none(right)
         case GroupValue():
             return True  # a key with no records
+        case Aggregated(aggregate):
+            return aggregate not in (SUM, COUNT)  # which give 0 over no records
         case _:
             return False  # a number in arithmetic
 

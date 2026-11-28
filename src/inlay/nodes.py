@@ -217,7 +217,9 @@ def as_condition(value: object) -> Condition:
 
 
 def check_condition(cls: type, cond: Condition) -> None:
-    """Raise if `cond` tests a field that is not a field of `cls`."""
+    """Raise if `cond` tests a field that is not a field of `cls`, or an aggregate."""
+    if any(aggregates(cond)):
+        raise TypeError("an aggregate such as Order.amount.sum() can only be the value of a projection field")
     for field in condition_fields(cond):
         if field.owner is not cls:
             raise ValueError(f"{field.owner.__name__}.{field.name} cannot be used on {cls.__name__}")
@@ -271,8 +273,10 @@ def _classes_reached(value: object) -> set[type]:
             return {r.target for r in refs if r.target is not None}
         case GroupValue(groups, at):
             return classes_read(groups).union(*map(_classes_reached, at))
-        case Aggregated(_, inner, _, cond):
-            return {value_class(inner)} | _classes_reached(inner) | (set() if cond is None else classes_read(cond))
+        case Aggregated(_, inner, ref, cond):
+            # The records aggregated are of the class that holds `ref`, which a projection has set.
+            aggregated = set() if ref is None else {ref.owner}
+            return aggregated | _classes_reached(inner) | (set() if cond is None else classes_read(cond))
         case Call(_, args):
             return set().union(*map(_classes_reached, args))
         case BinOp(_, left, right):
@@ -323,11 +327,61 @@ def describe(value: object) -> str:
             return repr(value)
 
 
-def value_class(value: Value) -> type:
-    """The class of the records `value` is a value of, such as `Order` for `Order.amount`."""
+def value_class(value: Value) -> type | None:
+    """The class of the records `value` is a value of, such as `Order` for `Order.amount` and `Customer` for
+    `Order.amount.sum(Order.customer)`; None when it is only aggregates whose `Ref` a projection infers."""
     for field in value_fields(value):
         return field.owner
-    raise TypeError(f"expected a value of a record, such as Order.total, got {describe(value)}")
+    for aggregated in aggregates(value):
+        if aggregated.ref is not None:
+            return aggregated.ref.target
+    return None
+
+
+def aggregates(node: object) -> Iterator[Aggregated]:
+    """The aggregates in `node`, a value or a condition, not counting those inside another aggregate."""
+    match node:
+        case Aggregated():
+            yield node
+        case Call(_, args):
+            for v in args:
+                yield from aggregates(v)
+        case BinOp(_, left, right) | Compare(left, _, right):
+            yield from aggregates(left)
+            yield from aggregates(right)
+        case And(items) | Or(items):
+            for item in items:
+                yield from aggregates(item)
+        case Not(item):
+            yield from aggregates(item)
+
+
+def resolved(value: object, cls: type) -> Any:
+    """`value` on a record of `cls`, with the `Ref` of each aggregate in it: the one named, which must point at
+    `cls`, or else the one `Ref` the records aggregated have to `cls`."""
+    match value:
+        case Aggregated(aggregate, inner, ref, cond):
+            of = value_class(inner)
+            if of is None:
+                raise TypeError(
+                    "an aggregate of an aggregate needs the inner one's Ref named, as OrderLine.qty.sum(OrderLine.order).sum()"
+                )
+            if ref is None:
+                refs = [f for f in meta(of).fields if f.target is cls]
+                if of is cls or len(refs) != 1:
+                    why = (f"{cls.__name__} refers to itself" if of is cls
+                           else f"{of.__name__} has {len(refs)} Refs to {cls.__name__}")
+                    raise TypeError(f"{aggregate.name} of {describe(inner)} needs the Ref to aggregate along named, since {why}")
+                ref = refs[0]
+            elif ref.target is not cls:
+                raise TypeError(f"{describe(ref)} points at {ref.target.__name__ if ref.target else None}, not {cls.__name__}")
+            return Aggregated(aggregate, resolved(inner, of), ref, cond)
+        case Call(fn, args):
+            return Call(fn, tuple(resolved(a, cls) for a in args))
+        case BinOp(op, left, right):
+            return BinOp(op, resolved(left, cls), resolved(right, cls))
+        case _:
+            return value
 
 
 def value_fields(value: object) -> Iterator[FieldMeta]:

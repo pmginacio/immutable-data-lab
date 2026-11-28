@@ -17,10 +17,12 @@ from inlay.nodes import (
     RefValue,
     Table,
     Value,
+    aggregates,
     check_condition,
     condition_fields,
     describe,
     replaced,
+    resolved,
     result_type,
     value_class,
     value_fields,
@@ -154,6 +156,10 @@ class Expr[T](Field[T]):
         are not None. A projection infers `ref` when the records have exactly one `Ref` to it."""
         value = _own(self)
         cls = value_class(value)
+        if cls is None:
+            raise TypeError(
+                "an aggregate of an aggregate needs the inner one's Ref named, as OrderLine.qty.sum(OrderLine.order).sum()"
+            )
         field = None
         if ref is not None:
             relations, field = _field_parts(ref)
@@ -202,13 +208,15 @@ class Expr[T](Field[T]):
         """`other` as part of a node with this value: a plain value, or the value of an `Expr` of the same record."""
         if not isinstance(other, Expr):
             return other
-        if other.__record() != self.__record():
+        (relations, cls), (other_relations, other_cls) = self.__record(), other.__record()
+        # An aggregate whose `Ref` a projection infers has no class yet, and the projection checks it.
+        if relations != other_relations or None not in (cls, other_cls) and cls is not other_cls:
             raise ValueError("only values of the same record can be combined")
         return other.__value
 
-    def __record(self) -> tuple[tuple[FieldMeta, ...], type]:
+    def __record(self) -> tuple[tuple[FieldMeta, ...], type | None]:
         """Which record the value is computed from: the relations that reach it and its class."""
-        return self.__relations, next(value_fields(self.__value)).owner
+        return self.__relations, value_class(self.__value)
 
 
 def _check_comparable(value: Value, plain: object) -> None:
@@ -228,9 +236,14 @@ def _own(value: object) -> Value:
     return RefValue(relations, v) if relations else v
 
 
-def own_value(cls: type, value: object) -> Value:
-    """The value `value` stands for on a record of `cls`: computed from its fields, or read through its `Ref`s."""
+def own_value(cls: type, value: object, *, aggregated: bool = False) -> Value:
+    """The value `value` stands for on a record of `cls`: computed from its fields, or read through its `Ref`s, or
+    with `aggregated`, as for a projection field, over the records that point at it."""
     own = _own(value)
+    if aggregated:
+        own = resolved(own, cls)
+    elif any(aggregates(own)):
+        raise TypeError("an aggregate such as Order.amount.sum() can only be the value of a projection field")
     for field in value_fields(own):
         if field.owner is not cls:
             raise ValueError(f"{field.owner.__name__}.{field.name} is not a field of {cls.__name__}")

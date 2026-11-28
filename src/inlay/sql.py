@@ -233,6 +233,8 @@ def value_sql(value: object, rows: _Rows = _ONE_TABLE) -> tuple[str, list[object
                 # SQLite divides two integers without a remainder; Python's `/` does not.
                 left_sql = f"CAST({left_sql} AS REAL)"
             return f"({left_sql} {op} {right_sql})", left_params + right_params
+        case Aggregated(aggregate, inner, ref, cond) if ref is not None and rows.root is not None:
+            return _aggregated_sql(aggregate, inner, ref, cond, rows)
         case Aggregated():
             raise TypeError("an aggregate such as Order.amount.sum() can only be the value of a projection field")
         case RefValue(refs, inner) if refs in rows.joined:
@@ -248,6 +250,30 @@ def value_sql(value: object, rows: _Rows = _ONE_TABLE) -> tuple[str, list[object
             return sql, grouped_params + [p for _, params in parts for p in params]
         case _:
             return "?", [to_sql(value)]
+
+
+def _aggregated_sql(
+    aggregate: Aggregate[Any],
+    value: Value,
+    ref: FieldMeta,
+    cond: Condition | None,
+    rows: _Rows,
+) -> tuple[str, list[object]]:
+    """`aggregate` of `value` over the records whose `ref` points at the record of `rows`, those `cond` keeps:
+    a subquery on `ref`'s column, which an index always leads.
+
+    Its records are named after the outer ones and `ref`, as "0/customer", so the outer record stays reachable."""
+    root = f"{rows.root}/{ref.name}"
+    inner = _Rows(root, _joined_paths(_ref_paths([value, cond] if cond is not None else [value])))
+    value_part, params = value_sql(value, inner)
+    assert ref.target is not None
+    where = f"{inner.column(ref)} = {rows.column(meta(ref.target).key)}"
+    if cond is not None:
+        cond_sql, cond_params = condition_sql(cond, inner)
+        where += f" AND {cond_sql}"
+        params = params + cond_params
+    sql = f"(SELECT {aggregate.sql.format(value_part)} FROM {quote(meta(ref.owner).table)} AS {quote(root)}"
+    return f"{sql}{_joins_sql(inner)} WHERE {where})", params
 
 
 def _ref_value_sql(refs: tuple[FieldMeta, ...], value: Value, outer: int) -> tuple[str, list[object]]:

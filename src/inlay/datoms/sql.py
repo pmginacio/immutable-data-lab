@@ -7,6 +7,7 @@ from inlay.functions import Aggregate
 from inlay.meta import EntityMeta, FieldMeta, meta
 from inlay.nodes import (
     And,
+    Aggregated,
     BinOp,
     Call,
     Compare,
@@ -368,6 +369,8 @@ def value_sql(value: object) -> tuple[str, list[object]]:
             return f"({left_sql} {op} {right_sql})", left_params + right_params
         case RefValue():
             raise TypeError(f"the datoms version does not support values read through a Ref yet: {describe(value)}")
+        case Aggregated():
+            raise TypeError("the datoms version does not support aggregates yet")
         case GroupValue():
             raise TypeError("the datoms version does not support values of groups yet")
         case _:
